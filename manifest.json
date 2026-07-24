@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "SiteSaver",
+  "version": "3.1",
+  "description": "Скачивает любой сайт целиком: HTML, CSS, JS, шрифты, картинки, анимации — Download any website as a full offline copy",
+  "permissions": ["downloads", "activeTab", "storage", "debugger", "sidePanel", "unlimitedStorage"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "SiteSaver"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": { "128": "icon.png" },
+  "homepage_url": "https://github.com/hizyyo/sitesaver"
+}
