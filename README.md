@@ -1,153 +1,68 @@
 <p align="center">
-  <img src="icon.png" width="128" height="128" alt="SiteSaver logo">
+  <img src="icon.png" width="128" alt="SiteSaver">
 </p>
 
 <h1 align="center">SiteSaver</h1>
 
 <p align="center">
-  <strong>Полная офлайн-копия любого сайта в один клик</strong><br>
-  <em>Download any website as a fully offline copy — one click</em>
+  <b>Download any website as a full offline copy. One click.</b><br>
+  <i>Скачать любой сайт целиком в офлайн. Один клик.</i>
 </p>
 
-<p align="center">
-  Chrome Extension · Manifest V3 · <code>chrome.debugger</code> API
-</p>
+<p align="center">Chrome Extension · Manifest V3 · <code>chrome.debugger</code> API</p>
 
 ---
 
-## 🇷🇺 Русский
+## English
 
-### Описание
+SiteSaver is a Chrome extension that downloads entire websites — HTML, CSS, JavaScript, fonts, images. Everything. It zips it all up with a `package.json` so you just extract and run `npm run dev`.
 
-**SiteSaver** — это Chrome-расширение, которое скачивает любой сайт целиком: HTML, CSS, JavaScript, шрифты, изображения, анимации. Сайт сохраняется в виде zip-архива с готовым `package.json`, достаточно распаковать и запустить `npm run dev`.
+### Why this exists
 
-### Как это работает
+Other "save page" tools miss half the resources. Dynamic JS chunks, lazy-loaded images, CDN fonts — they only get what's in the initial HTML. SiteSaver uses `chrome.debugger` to intercept every HTTP request at the browser protocol level. Nothing gets missed.
 
-Расширение использует `chrome.debugger` API (режим разработчика), чтобы перехватывать все HTTP-ответы, включая динамические JS-чанки и ленивые ресурсы. Оно не просто скачивает HTML — оно собирает полный слепок страницы со всеми зависимостями.
+### How it works
 
-**Процесс в один клик:**
-1. Нажать «Захватить сайт» в боковой панели
-2. Расширение перезагружает страницу через отладчик
-3. Ожидает полной загрузки всех ресурсов
-4. Прокручивает страницу для подгрузки ленивых изображений
-5. Собирает HTML через DOM API (с тремя уровнями fallback)
-6. Упаковывает всё в zip и скачивает
+1. You open a site and click "Capture" in the side panel.
+2. SiteSaver reloads the page through Chrome's debugger, intercepting every response.
+3. It waits for everything to finish loading, then scrolls the page to trigger lazy resources.
+4. It grabs the final DOM (with three fallback methods so nothing breaks).
+5. All URLs in the HTML are rewritten to local paths.
+6. Everything gets packed into a zip and downloaded.
 
-### Установка
+The zip includes:
+- `index.html` with all paths rewritten
+- All CSS, JS, fonts, images, videos
+- `package.json` — just run `npm run dev`
 
-1. Скачайте репозиторий или [релиз](https://github.com/hizyyo/sitesaver/releases)
-2. Откройте `chrome://extensions`
-3. Включите «Режим разработчика»
-4. Нажмите «Загрузить распакованное» и выберите папку с расширением
-5. Готово — иконка расширения появится в панели
+### Install
 
-### Использование
+1. Clone this repo or grab a [release](https://github.com/hizyyo/sitesaver/releases).
+2. Go to `chrome://extensions`, enable Developer mode.
+3. Click "Load unpacked" and pick the folder.
+4. Done.
 
-1. Откройте любой сайт в Chrome
-2. Нажмите на иконку расширения (пазл → SiteSaver) — откроется боковая панель
-3. Нажмите «Захватить сайт»
-4. После завершения скачается zip-архив
-5. Распакуйте архив, откройте папку в терминале:
+### Using it
+
+1. Open any site in Chrome.
+2. Click the SiteSaver icon in the toolbar (or puzzle icon → SiteSaver).
+3. The side panel opens on the right.
+4. Click "Захватить сайт".
+5. A zip downloads. Extract it.
+6. Open the folder in terminal:
    ```bash
    npm run dev
    ```
-6. Откройте `http://localhost:8080`
+7. Open `http://localhost:8080`.
 
-### Технические детали
+### Tech stuff
 
-- **Manifest V3** — современная архитектура расширений Chrome
-- **Side Panel** — панель справа, не закрывается при обновлении страницы
-- **chrome.debugger API** — перехватывает все сетевые запросы на уровне протокола DevTools
-- **Тройной fallback для HTML:**
-  1. `DOM.getOuterHTML` — напрямую из DOM (самый надёжный)
-  2. `Runtime.evaluate` — через `document.documentElement.outerHTML`
-  3. Сетевое тело ответа — последний шанс
-- **Фильтр MIME-типов** — отсекает API-ответы и ненужный мусор
-- **Автоматическая замена URL** — все ссылки в HTML заменяются на локальные пути
-- **Scrolling** — прокрутка страницы для подгрузки lazy-ресурсов
-- **JSZip** — сборка архива на стороне клиента
-
-### Возможности
-
-- ✔ Один клик — полная копия сайта
-- ✔ Работает с SPA, статикой, WordPress, любыми сайтами
-- ✔ Не требует API-ключей или сторонних сервисов
-- ✔ Локальный сервер через `npm run dev`
-- ✔ Автоматическая обработка путей
-- ✔ Поддержка ленивых изображений
-- ✔ Поддержка шрифтов и иконок
-- ✔ Поддержка видео и аудио
-- ✔ Фильтрация мусора (API-запросы, аналитика)
-
-### Лицензия
-
-MIT
-
----
-
-## 🇬🇧 English
-
-### Description
-
-**SiteSaver** is a Chrome extension that downloads any website in its entirety: HTML, CSS, JavaScript, fonts, images, animations. The site is saved as a zip archive with a ready-to-use `package.json` — just extract and run `npm run dev`.
-
-### How It Works
-
-The extension uses the `chrome.debugger` API (developer mode) to intercept all HTTP responses, including dynamic JS chunks and lazy resources. It doesn't just download the HTML — it captures a complete snapshot of the page with all dependencies.
-
-**One-click process:**
-1. Click "Capture Site" in the side panel
-2. The extension reloads the page via the debugger
-3. Waits for all resources to fully load
-4. Scrolls the page to trigger lazy images
-5. Captures HTML via the DOM API (with three fallback levels)
-6. Packages everything into a zip and downloads it
-
-### Installation
-
-1. Clone the repo or download a [release](https://github.com/hizyyo/sitesaver/releases)
-2. Open `chrome://extensions`
-3. Enable "Developer mode"
-4. Click "Load unpacked" and select the extension folder
-5. Done — the extension icon will appear in the toolbar
-
-### Usage
-
-1. Open any website in Chrome
-2. Click the extension icon (puzzle → SiteSaver) — the side panel opens
-3. Click "Capture Site"
-4. When complete, a zip archive downloads
-5. Extract the archive, open the folder in a terminal:
-   ```bash
-   npm run dev
-   ```
-6. Open `http://localhost:8080`
-
-### Technical Details
-
-- **Manifest V3** — modern Chrome extension architecture
-- **Side Panel** — stays open across page navigations
-- **chrome.debugger API** — intercepts all network requests at the DevTools protocol level
-- **Triple fallback for HTML:**
-  1. `DOM.getOuterHTML` — directly from the DOM (most reliable)
-  2. `Runtime.evaluate` — via `document.documentElement.outerHTML`
-  3. Network response body — last resort
-- **MIME type filter** — filters out API responses and garbage
-- **Automatic URL rewriting** — all URLs in HTML are replaced with local paths
-- **Scrolling** — auto-scrolls to trigger lazy-loaded resources
-- **JSZip** — client-side archive generation
-
-### Features
-
-- ✔ One click — full site copy
-- ✔ Works with SPAs, static sites, WordPress, any website
-- ✔ No API keys or third-party services required
-- ✔ Local server via `npm run dev`
-- ✔ Automatic path rewriting
-- ✔ Lazy image support
-- ✔ Font and icon support
-- ✔ Video and audio support
-- ✔ Garbage filtering (API requests, analytics)
+- **Manifest V3** — modern Chrome extension architecture.
+- **chrome.debugger API** — hooks into DevTools protocol to intercept all network traffic.
+- **Triple HTML fallback**: DOM API → Runtime.evaluate → raw network response. Never fails.
+- **MIME filter** — blocks API responses and analytics junk.
+- **URL rewriting** — replaces every URL in HTML with the local file path.
+- **JSZip** — builds the archive in-browser.
 
 ### License
 
@@ -155,4 +70,61 @@ MIT
 
 ---
 
-<p align="center">Built with ❤️ by <a href="https://github.com/hizyyo">hizyyo</a></p>
+## Русский
+
+SiteSaver — это расширение для Chrome, которое скачивает сайты целиком: HTML, CSS, JavaScript, шрифты, картинки. Всё, что есть на странице. Упаковывает в zip с `package.json` — распаковал, запустил `npm run dev`, готово.
+
+### Зачем это нужно
+
+Обычные «сохранить страницу» пропускают половину ресурсов. Динамические JS-чанки, ленивые картинки, шрифты с CDN — они берут только то, что в изначальном HTML. SiteSaver использует `chrome.debugger` и перехватывает каждый HTTP-запрос на уровне протокола браузера. Ничего не теряется.
+
+### Как работает
+
+1. Открываете сайт, нажимаете «Захватить сайт» в боковой панели.
+2. Расширение перезагружает страницу через отладчик и перехватывает все ответы.
+3. Ждёт полной загрузки, потом прокручивает страницу, чтобы подгрузились ленивые ресурсы.
+4. Забирает финальный DOM (три уровня fallback — если один не сработает, сработает другой).
+5. Заменяет все URL в HTML на локальные пути.
+6. Упаковывает всё в zip и скачивает.
+
+В архиве:
+- `index.html` с переписанными путями
+- Все CSS, JS, шрифты, картинки, видео
+- `package.json` — запустил `npm run dev` и всё работает
+
+### Установка
+
+1. Склонируйте репозиторий или скачайте [релиз](https://github.com/hizyyo/sitesaver/releases).
+2. Откройте `chrome://extensions`, включите «Режим разработчика».
+3. Нажмите «Загрузить распакованное» и выберите папку с расширением.
+4. Готово.
+
+### Как пользоваться
+
+1. Откройте любой сайт в Chrome.
+2. Нажмите на иконку SiteSaver (или пазл → SiteSaver).
+3. Справа откроется панель.
+4. Нажмите «Захватить сайт».
+5. Скачается zip. Распакуйте.
+6. Откройте папку в терминале:
+   ```bash
+   npm run dev
+   ```
+7. Откройте `http://localhost:8080`.
+
+### Техническое
+
+- **Manifest V3** — современная архитектура расширений Chrome.
+- **chrome.debugger API** — перехватывает весь сетевой трафик на уровне протокола DevTools.
+- **Тройной fallback**: DOM API → Runtime.evaluate → сырой ответ сервера. Никаких пустых страниц.
+- **MIME-фильтр** — отсекает API-запросы и мусор аналитики.
+- **Замена URL** — каждый адрес в HTML заменяется на локальный путь к файлу.
+- **JSZip** — сборка архива прямо в браузере.
+
+### Лицензия
+
+MIT
+
+---
+
+<p align="center">Built by <a href="https://github.com/hizyyo">hizyyo</a></p>
