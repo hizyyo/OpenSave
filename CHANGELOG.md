@@ -4,6 +4,13 @@ All notable changes to SiteSaver are documented here.
 
 ## Unreleased
 
+## [3.2.1] - 2026-08-11
+
+### Fixed
+
+- Deep capture now waits for and activates safe visible startup overlays such as `START`, `BEGIN`, `ENTER`, and `LAUNCH` before generic UI exploration. This supports WebGL and 3D sites that load their scene only after a non-semantic clickable `div` is activated.
+- Startup overlay activation explicitly excludes links, forms, and editable controls to avoid navigation or data-changing actions.
+
 ## [3.2.0] - 2026-08-11
 
 ### Added

@@ -917,6 +917,7 @@ async function capture(action = 'fullCapture') {
     log(`Перехвачено ответов: ${bodies.length}`);
     log(capturedMode === 'deep' ? 'Режим: глубокий захват' : 'Режим: быстрый захват');
     if (interaction) log(`Интерактивных элементов: ${interaction.clicked} нажато, ${interaction.skipped} пропущено`);
+    if (interaction && interaction.startActivation && interaction.startActivation.clicked) log(`Стартовый overlay активирован после ${interaction.startActivation.waited} мс ожидания`);
     if (interaction && interaction.hover) log(`Hover-элементов: ${interaction.hover.hovered}, scroll-контейнеров: ${interaction.scrollContainers}`);
     if (interaction && interaction.replayedScenario.total) log(`Сценарий: ${interaction.replayedScenario.replayed}/${interaction.replayedScenario.total} действий повторено`);
     if (canvasSnapshots.length) log(`Canvas-снимков: ${canvasSnapshots.length}`);

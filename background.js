@@ -533,6 +533,9 @@ async function fullCapture(tabId, sendResponse, scenario = [], operation, mode =
     await pageLoaded;
     await sleep(mode === 'deep' ? 1500 : 600);
 
+    const startActivation = mode === 'deep'
+      ? await optionalStage('Start overlay activation', () => activateStartOverlay(tabId), { clicked: 0, waited: 0 })
+      : { clicked: 0, waited: 0 };
     const replayedScenario = mode === 'deep'
       ? await optionalStage('Scenario replay', () => replayScenario(tabId, scenario), { total: scenario.length, replayed: 0 })
       : { total: 0, replayed: 0 };
@@ -564,7 +567,7 @@ async function fullCapture(tabId, sendResponse, scenario = [], operation, mode =
       html: document.html,
       bodies: Array.from(capturedBodies.values()),
       apiSnapshots: Array.from(apiSnapshots.values()),
-      interaction: { ...interaction, hover, replayedScenario, scrollContainers: firstScroll.containers + finalScroll.containers },
+      interaction: { ...interaction, hover, replayedScenario, startActivation, scrollContainers: firstScroll.containers + finalScroll.containers },
       canvasSnapshots,
       report: captureReport,
       mode,
@@ -801,6 +804,45 @@ async function replayScenario(tabId, scenario) {
     userGesture: true
   });
   return result.result.value || { total: scenario.length, replayed: 0 };
+}
+
+async function activateStartOverlay(tabId) {
+  const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+    expression: `
+      (async () => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const startLabel = /^(?:start|begin|enter|launch)$/i;
+        const visible = (element) => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.visibility !== 'hidden' && style.display !== 'none' && style.pointerEvents !== 'none' && rect.width > 0 && rect.height > 0;
+        };
+        const candidate = () => [...document.querySelectorAll('button, [role="button"], [onclick], [data-action], [data-testid], div, span')]
+          .find((element) => {
+            if (!visible(element) || element.closest('form, a[href], [contenteditable="true"]')) return false;
+            const text = (element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim();
+            return startLabel.test(text);
+          });
+
+        let waited = 0;
+        for (; waited < 8000; waited += 250) {
+          const element = candidate();
+          if (!element) {
+            await delay(250);
+            continue;
+          }
+          element.scrollIntoView({ block: 'center', inline: 'center' });
+          element.click();
+          await delay(1500);
+          return { clicked: 1, waited };
+        }
+        return { clicked: 0, waited };
+      })()
+    `,
+    awaitPromise: true,
+    userGesture: true
+  });
+  return result.result.value || { clicked: 0, waited: 0 };
 }
 
 function serializeForRuntime(value) {

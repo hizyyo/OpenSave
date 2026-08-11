@@ -2,6 +2,14 @@
 
 SiteSaver uses two complementary archive checks.
 
+It also has a focused regression check for delayed, non-semantic start overlays used by WebGL and 3D experiences.
+
+```powershell
+node tests/start-overlay-regression.mjs
+```
+
+This check ensures Deep capture activates a visible startup control before generic UI exploration, waits for delayed loaders, and does not treat links or forms as safe startup controls.
+
 ## Golden Archive Check
 
 The golden check validates archive structure without launching a browser.

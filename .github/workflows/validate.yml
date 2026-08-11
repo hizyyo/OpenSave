@@ -24,6 +24,9 @@ jobs:
           node --check sidepanel.js
           node --check tests/golden-capture.mjs
           node --check tests/browser-integration.mjs
+          node --check tests/start-overlay-regression.mjs
+      - name: Start-overlay regression check
+        run: node tests/start-overlay-regression.mjs
       - name: Golden archive check
         run: node tests/golden-capture.mjs tests/fixtures/offline-archive
       - name: Browser integration check
