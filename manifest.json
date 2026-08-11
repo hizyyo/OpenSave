@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "SiteSaver",
-  "version": "3.1",
+  "version": "3.2.0",
   "minimum_chrome_version": "125",
-  "description": "Скачивает любой сайт целиком: HTML, CSS, JS, шрифты, картинки, анимации — Download any website as a full offline copy",
+  "description": "Capture pages and sites as reproducible offline archives with assets, API snapshots, and reports.",
   "permissions": ["downloads", "activeTab", "storage", "debugger", "sidePanel", "unlimitedStorage"],
   "host_permissions": ["<all_urls>"],
   "action": {
@@ -15,6 +15,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "icons": { "128": "icon.png" },
+  "icons": { "16": "icon.png", "32": "icon.png", "48": "icon.png", "128": "icon.png" },
   "homepage_url": "https://github.com/hizyyo/sitesaver"
 }

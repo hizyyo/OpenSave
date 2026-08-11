@@ -1,0 +1,27 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Static checks
+        run: |
+          node --check background.js
+          node --check sidepanel.js
+          node --check tests/golden-capture.mjs
+          node --check tests/browser-integration.mjs
+      - name: Golden archive check
+        run: node tests/golden-capture.mjs tests/fixtures/offline-archive
+      - name: Browser integration check
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tests/browser-integration.mjs tests/fixtures/offline-archive

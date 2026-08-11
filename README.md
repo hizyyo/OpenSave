@@ -1,135 +1,202 @@
 <p align="center">
-  <img src="icon.png" width="128" alt="SiteSaver">
+  <img src="icon.png" width="112" alt="SiteSaver black and white document icon">
 </p>
 
 <h1 align="center">SiteSaver</h1>
 
 <p align="center">
-  <b>Download any website as a full offline copy. One click.</b><br>
-  <i>Скачать любой сайт целиком в офлайн. Один клик.</i>
+  <strong>Capture a web experience. Export a reproducible offline archive.</strong><br>
+  Chrome extension for research-grade HTML, asset, API, and interaction capture.
 </p>
 
-<p align="center">Chrome Extension · Manifest V3 · <code>chrome.debugger</code> API</p>
+<p align="center">
+  <a href="https://github.com/hizyyo/sitesaver/blob/main/LICENSE">MIT License</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#capture-modes">Capture Modes</a> ·
+  <a href="#russian">Русский</a>
+</p>
 
 ---
 
-## English
+## What SiteSaver Does
 
-SiteSaver is a Chrome extension that downloads website snapshots — HTML, CSS, JavaScript, fonts, images, API responses, and media — into a static offline archive.
+SiteSaver is a Manifest V3 Chrome extension that captures the active page through the Chrome DevTools Protocol and exports a static offline archive.
 
-### Why this exists
+The archive can include:
 
-Other "save page" tools miss half the resources. Dynamic JS chunks, lazy-loaded images, CDN fonts — they only get what's in the initial HTML. SiteSaver uses `chrome.debugger` to intercept every HTTP request at the browser protocol level. Nothing gets missed.
+- Final page HTML and structured local URL rewrites.
+- CSS, JavaScript, images, video, audio, fonts, WebAssembly, and 3D resources.
+- Dynamic imports, module dependencies, worker dependencies, source maps, `glTF` buffers, and model textures when they are discoverable.
+- Captured `fetch` and XHR response snapshots for offline replay.
+- Same-origin internal pages in Deep mode.
+- A generated offline service worker, SPA fallback, capture report, and portable archive manifest.
 
-### How it works
+SiteSaver is designed for websites and content you own or are authorized to archive.
 
-1. You open a site and click "Capture" in the side panel.
-2. SiteSaver reloads the page through Chrome's debugger, intercepting every response.
-3. It waits for everything to finish loading, then scrolls the page to trigger lazy resources.
-4. It grabs the final DOM (with three fallback methods so nothing breaks).
-5. All URLs in the HTML are rewritten to local paths.
-6. Everything gets packed into a zip and downloaded.
+## Capture Modes
 
-The zip includes:
-- `index.html` with all paths rewritten
-- All CSS, JS, fonts, images, videos
-- `sitesaver-manifest.json` and `sitesaver-report.json`
-- `README.txt` with static-hosting requirements
+### Quick
 
-### Install
+Fast capture for the current page.
 
-1. Clone this repo or grab a [release](https://github.com/hizyyo/sitesaver/releases).
-2. Go to `chrome://extensions`, enable Developer mode.
-3. Click "Load unpacked" and pick the folder.
-4. Done.
+- Reloads and records the page's direct network responses.
+- Collects direct HTML, CSS, JS, media, font, and module dependencies.
+- Does not crawl internal pages, explore UI states, hover elements, inspect Cache Storage, or capture canvas fallbacks.
 
-### Using it
+Use it when you need a fast static snapshot.
 
-1. Open any site in Chrome.
-2. Click the SiteSaver icon in the toolbar (or puzzle icon → SiteSaver).
-3. The side panel opens on the right.
-4. Click "Захватить сайт".
-5. A zip downloads. Extract it.
-6. Upload the extracted folder to any static HTTP(S) host at its root, or open it through any local static server.
+### Deep
 
-### Tech stuff
+Exhaustive capture for reproducibility research.
 
-- **Manifest V3** — modern Chrome extension architecture.
-- **chrome.debugger API** — hooks into DevTools protocol to intercept all network traffic.
-- **Triple HTML fallback**: DOM API → Runtime.evaluate → raw network response. Never fails.
-- **MIME filter** — blocks API responses and analytics junk.
-- **URL rewriting** — replaces every URL in HTML with the local file path.
-- **JSZip** — builds the archive in-browser.
+- Scrolls the document and internal scroll containers.
+- Explores safe UI states such as tabs, menus, accordions, and disclosure controls.
+- Performs hover exploration and state rollback.
+- Captures API snapshots, same-origin iframe/worker traffic, Cache Storage where Chrome exposes it, canvas fallback images, and internal pages.
+- Produces a completeness score and diagnostics in `sitesaver-report.json`.
 
-### Research capture mode
+Deep mode intentionally refuses forms, external links, payments, deletion, logout, subscription, and similarly unsafe interactions.
 
-SiteSaver also exports an offline service worker, API snapshots, a completeness score, `sitesaver-report.json`, cache/worker diagnostics, and a static regression check in `tests/golden-capture.mjs`. For high-value captures, use a manual scenario before capture and run the golden check against the unpacked archive.
+### Element Picker
 
-Deep captures stream resource data through Chrome DevTools Protocol when Chrome supports it, preserve safe UI-state exploration with rollback, and can be checked in a real headless Chrome session with `tests/browser-integration.mjs`.
+Choose a single block instead of an entire page.
 
-### License
+1. Click **Choose a block on page**.
+2. Hover any visible element to preview the black-and-white outline.
+3. Click to export the selected DOM subtree, its layout context, styles, and discovered assets.
+4. Press `Esc` to cancel.
 
-MIT
+### Recorded Scenario
+
+Use **Record scenario** to manually expose a modal, 3D configuration, tab, or other application state before deep capture. SiteSaver records safe semantic actions, excludes sensitive text fields, and replays the scenario after reload.
+
+## Quick Start
+
+1. Download or clone this repository.
+2. Open `chrome://extensions`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked** and select this folder.
+5. Open the target site, click SiteSaver, select **Quick** or **Deep**, then start capture.
+6. Extract the downloaded ZIP.
+7. Serve the extracted folder from the root of any static HTTP(S) host.
+
+Do not open the archive with `file://`. Browsers require HTTP(S) for ES modules and service workers.
+
+## Archive Format
+
+Every full capture produces a portable static archive:
+
+```text
+index.html                 Captured entry document
+404.html                   SPA fallback helper
+assets/                    Captured resources grouped by source host
+api-snapshots/             Captured Fetch/XHR response bodies
+screenshots/               Canvas/WebGL fallbacks when available
+sitesaver-sw.js            Offline service worker
+sitesaver-offline.js       Offline runtime bootstrap
+sitesaver-manifest.json    Source URL, mode, timestamps, resource counts
+sitesaver-report.json      Completeness score and diagnostics
+README.txt                 Static-hosting instructions for the archive
+```
+
+The archive does not require Node.js, a bundler, or the original source code. Any static HTTP(S) host can serve it.
+
+## Offline Behavior
+
+The generated runtime:
+
+- Serves saved HTML, CSS, JS, media, and font files from Cache Storage.
+- Replays matching API snapshots.
+- Falls back to `index.html` for SPA navigation.
+- Blocks outside-network requests instead of silently reaching production.
+- Reports incomplete captures through `sitesaver-report.json`.
+
+## Completeness Report
+
+`sitesaver-report.json` is the source of truth for capture quality. It records:
+
+- Discovered versus saved resource count and completeness score.
+- Missing files and unavailable internal pages.
+- Network/HTTP diagnostics.
+- Child target, worker, iframe, and Cache Storage observations.
+- Crawler limits when a Deep capture reaches its exploration budget.
+
+An incomplete report does not mean the archive is unusable. It identifies exactly which browser-visible resources were unavailable or intentionally excluded.
+
+## Known Boundaries
+
+SiteSaver can preserve what the browser receives. It cannot reconstruct:
+
+- Server-side source code, databases, secrets, payment systems, or private backend logic.
+- Authentication state that was not available to the capture session.
+- Live WebSocket sessions or future server-generated data.
+- Resources that require an interaction or state that was never reached during capture.
+- Closed Shadow DOM contents or browser responses Chrome does not expose.
+
+## Development
+
+There is no build step. Chrome loads the extension files directly.
+
+```powershell
+node --check background.js
+node --check sidepanel.js
+node tests/golden-capture.mjs tests/fixtures/offline-archive
+node tests/browser-integration.mjs tests/fixtures/offline-archive
+```
+
+The browser integration test starts local Chrome, loads a fixture archive, verifies service-worker control and SPA navigation, checks for runtime/console errors, blocks external network requests, and saves a screenshot artifact.
+
+See:
+
+- [Contributing guide](CONTRIBUTING.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Offline archive format](docs/OFFLINE_ARCHIVE_FORMAT.md)
+- [Test harness](tests/README.md)
+- [Security policy](SECURITY.md)
+- [Repository metadata](REPOSITORY_METADATA.md)
+
+## Security and Ethics
+
+Use SiteSaver only for sites and content you own or have explicit permission to archive. A full capture may contain copyrighted material, personal data, tokens available to the active session, or third-party assets.
+
+Review `sitesaver-report.json` before sharing an archive. Never publish captures containing credentials, private data, or materials you are not authorized to redistribute.
+
+## License
+
+[MIT](LICENSE)
 
 ---
+
+<a id="russian"></a>
 
 ## Русский
 
-SiteSaver — это расширение для Chrome, которое создаёт статический офлайн-архив сайта: HTML, CSS, JavaScript, шрифты, картинки, API-ответы и медиа.
+SiteSaver создаёт воспроизводимый статический офлайн-архив активного сайта через Chrome DevTools Protocol.
 
-### Зачем это нужно
+### Что сохраняется
 
-Обычные «сохранить страницу» пропускают половину ресурсов. Динамические JS-чанки, ленивые картинки, шрифты с CDN — они берут только то, что в изначальном HTML. SiteSaver использует `chrome.debugger` и перехватывает каждый HTTP-запрос на уровне протокола браузера. Ничего не теряется.
+- Финальный HTML, CSS, JS, изображения, видео, шрифты, WebAssembly и 3D-ресурсы.
+- Динамические импорты, worker-зависимости, `glTF` buffers/текстуры и API-снимки.
+- В Deep режиме: внутренние страницы текущего домена, безопасные UI-состояния, Cache Storage, iframe/worker наблюдения и canvas fallback.
+- `sitesaver-sw.js`, SPA fallback, `sitesaver-report.json` и `sitesaver-manifest.json`.
 
-### Как работает
+### Режимы
 
-1. Открываете сайт, нажимаете «Захватить сайт» в боковой панели.
-2. Расширение перезагружает страницу через отладчик и перехватывает все ответы.
-3. Ждёт полной загрузки, потом прокручивает страницу, чтобы подгрузились ленивые ресурсы.
-4. Забирает финальный DOM (три уровня fallback — если один не сработает, сработает другой).
-5. Заменяет все URL в HTML на локальные пути.
-6. Упаковывает всё в zip и скачивает.
+- **Быстро**: текущая страница и прямые зависимости без долгого обхода.
+- **Глубоко**: scroll, hover, безопасные tabs/menu/accordion, API, cache, crawler и отчёт полноты.
+- **Выбор блока**: экспорт одного выделенного DOM-блока с контекстом и зависимостями.
+- **Сценарий**: вручную открыть нужное состояние, затем повторить его перед Deep захватом.
 
-В архиве:
-- `index.html` с переписанными путями
-- Все CSS, JS, шрифты, картинки, видео
-- `sitesaver-manifest.json`, `sitesaver-report.json` и `README.txt`
+### Как открыть архив
 
-### Установка
+Распакуйте ZIP и разместите папку в корне любого статического HTTP(S) сервера или хостинга. Node.js не нужен архиву. `file://` не поддерживается, потому что service worker и ES modules требуют HTTP(S).
 
-1. Склонируйте репозиторий или скачайте [релиз](https://github.com/hizyyo/sitesaver/releases).
-2. Откройте `chrome://extensions`, включите «Режим разработчика».
-3. Нажмите «Загрузить распакованное» и выберите папку с расширением.
-4. Готово.
+### Ограничения
 
-### Как пользоваться
+Расширение сохраняет только то, что увидел браузер. Оно не восстанавливает backend, платежи, базы данных, секреты, закрытые серверные вычисления и неиспользованные пользователем состояния приложения.
 
-1. Откройте любой сайт в Chrome.
-2. Нажмите на иконку SiteSaver (или пазл → SiteSaver).
-3. Справа откроется панель.
-4. Нажмите «Захватить сайт».
-5. Скачается zip. Распакуйте.
-6. Разместите распакованную папку в корне любого статического HTTP(S) сервера или хостинга.
-
-### Техническое
-
-- **Manifest V3** — современная архитектура расширений Chrome.
-- **chrome.debugger API** — перехватывает весь сетевой трафик на уровне протокола DevTools.
-- **Тройной fallback**: DOM API → Runtime.evaluate → сырой ответ сервера. Никаких пустых страниц.
-- **MIME-фильтр** — отсекает API-запросы и мусор аналитики.
-- **Замена URL** — каждый адрес в HTML заменяется на локальный путь к файлу.
-- **JSZip** — сборка архива прямо в браузере.
-
-### Research capture mode
-
-SiteSaver также экспортирует offline service worker, API-снимки, метрику полноты, `sitesaver-report.json`, диагностику cache/worker и статическую проверку `tests/golden-capture.mjs`. Для важных захватов запишите ручной сценарий, затем проверьте распакованный архив golden-тестом.
-
-Глубокий захват читает ресурсы через Chrome DevTools Protocol в потоковом режиме, когда Chrome это поддерживает, обходит безопасные UI-состояния с откатом и проверяется реальным headless Chrome через `tests/browser-integration.mjs`.
-
-### Лицензия
-
-MIT
+Перед распространением архива проверьте `sitesaver-report.json` и убедитесь, что у вас есть право сохранять и публиковать контент.
 
 ---
 
-<p align="center">Built by <a href="https://github.com/hizyyo">hizyyo</a></p>
+<p align="center">Built for reproducible web research by <a href="https://github.com/hizyyo">hizyyo</a>.</p>

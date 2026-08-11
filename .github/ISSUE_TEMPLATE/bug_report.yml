@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible SiteSaver defect
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include credentials, private URLs, or third-party content you are not authorized to share."
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome version
+      placeholder: "e.g. 125.0.6422.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Capture mode
+      options:
+        - Quick
+        - Deep
+        - Element picker
+        - Recorded scenario
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and capture report
+      description: Paste the relevant SiteSaver log or sitesaver-report.json excerpt.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
