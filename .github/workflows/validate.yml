@@ -9,10 +9,15 @@ jobs:
   extension:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: Install Chrome for Testing
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          install-dependencies: true
       - name: Static checks
         run: |
           node --check background.js
@@ -23,5 +28,5 @@ jobs:
         run: node tests/golden-capture.mjs tests/fixtures/offline-archive
       - name: Browser integration check
         env:
-          CHROME_PATH: /usr/bin/google-chrome
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: node tests/browser-integration.mjs tests/fixtures/offline-archive

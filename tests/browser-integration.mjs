@@ -91,10 +91,16 @@ server.listen(staticPort, '127.0.0.1');
 await once(server, 'listening');
 
 const profileDirectory = join(process.env.TEMP || process.cwd(), `sitesaver-chrome-${Date.now()}`);
+let chromeStartError = '';
+let chromeStderr = '';
 const chrome = spawn(chromePath, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-  `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profileDirectory}`, 'about:blank'
-], { stdio: 'ignore' });
+  '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--remote-allow-origins=*',
+  `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`,
+  `--user-data-dir=${profileDirectory}`, 'about:blank'
+], { stdio: ['ignore', 'ignore', 'pipe'] });
+chrome.once('error', (error) => { chromeStartError = error.message; });
+chrome.stderr.on('data', (chunk) => { chromeStderr += chunk.toString(); });
 
 const cleanup = async () => {
   server.close();
@@ -111,7 +117,10 @@ try {
       await delay(100);
     }
   }
-  if (!version) throw new Error('Chrome remote debugging did not start');
+  if (!version) {
+    const detail = [chromeStartError, chromeStderr.trim()].filter(Boolean).join('\n');
+    throw new Error(`Chrome remote debugging did not start${detail ? `:\n${detail}` : ''}`);
+  }
 
   let pageTarget;
   for (let attempt = 0; attempt < 50; attempt += 1) {
