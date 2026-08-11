@@ -15,7 +15,7 @@
 
 ## English
 
-SiteSaver is a Chrome extension that downloads entire websites — HTML, CSS, JavaScript, fonts, images. Everything. It zips it all up with a `package.json` so you just extract and run `npm run dev`.
+SiteSaver is a Chrome extension that downloads website snapshots — HTML, CSS, JavaScript, fonts, images, API responses, and media — into a static offline archive.
 
 ### Why this exists
 
@@ -33,7 +33,8 @@ Other "save page" tools miss half the resources. Dynamic JS chunks, lazy-loaded 
 The zip includes:
 - `index.html` with all paths rewritten
 - All CSS, JS, fonts, images, videos
-- `package.json` — just run `npm run dev`
+- `sitesaver-manifest.json` and `sitesaver-report.json`
+- `README.txt` with static-hosting requirements
 
 ### Install
 
@@ -49,11 +50,7 @@ The zip includes:
 3. The side panel opens on the right.
 4. Click "Захватить сайт".
 5. A zip downloads. Extract it.
-6. Open the folder in terminal:
-   ```bash
-   npm run dev
-   ```
-7. Open `http://localhost:8080`.
+6. Upload the extracted folder to any static HTTP(S) host at its root, or open it through any local static server.
 
 ### Tech stuff
 
@@ -64,6 +61,12 @@ The zip includes:
 - **URL rewriting** — replaces every URL in HTML with the local file path.
 - **JSZip** — builds the archive in-browser.
 
+### Research capture mode
+
+SiteSaver also exports an offline service worker, API snapshots, a completeness score, `sitesaver-report.json`, cache/worker diagnostics, and a static regression check in `tests/golden-capture.mjs`. For high-value captures, use a manual scenario before capture and run the golden check against the unpacked archive.
+
+Deep captures stream resource data through Chrome DevTools Protocol when Chrome supports it, preserve safe UI-state exploration with rollback, and can be checked in a real headless Chrome session with `tests/browser-integration.mjs`.
+
 ### License
 
 MIT
@@ -72,7 +75,7 @@ MIT
 
 ## Русский
 
-SiteSaver — это расширение для Chrome, которое скачивает сайты целиком: HTML, CSS, JavaScript, шрифты, картинки. Всё, что есть на странице. Упаковывает в zip с `package.json` — распаковал, запустил `npm run dev`, готово.
+SiteSaver — это расширение для Chrome, которое создаёт статический офлайн-архив сайта: HTML, CSS, JavaScript, шрифты, картинки, API-ответы и медиа.
 
 ### Зачем это нужно
 
@@ -90,7 +93,7 @@ SiteSaver — это расширение для Chrome, которое скач
 В архиве:
 - `index.html` с переписанными путями
 - Все CSS, JS, шрифты, картинки, видео
-- `package.json` — запустил `npm run dev` и всё работает
+- `sitesaver-manifest.json`, `sitesaver-report.json` и `README.txt`
 
 ### Установка
 
@@ -106,11 +109,7 @@ SiteSaver — это расширение для Chrome, которое скач
 3. Справа откроется панель.
 4. Нажмите «Захватить сайт».
 5. Скачается zip. Распакуйте.
-6. Откройте папку в терминале:
-   ```bash
-   npm run dev
-   ```
-7. Откройте `http://localhost:8080`.
+6. Разместите распакованную папку в корне любого статического HTTP(S) сервера или хостинга.
 
 ### Техническое
 
@@ -120,6 +119,12 @@ SiteSaver — это расширение для Chrome, которое скач
 - **MIME-фильтр** — отсекает API-запросы и мусор аналитики.
 - **Замена URL** — каждый адрес в HTML заменяется на локальный путь к файлу.
 - **JSZip** — сборка архива прямо в браузере.
+
+### Research capture mode
+
+SiteSaver также экспортирует offline service worker, API-снимки, метрику полноты, `sitesaver-report.json`, диагностику cache/worker и статическую проверку `tests/golden-capture.mjs`. Для важных захватов запишите ручной сценарий, затем проверьте распакованный архив golden-тестом.
+
+Глубокий захват читает ресурсы через Chrome DevTools Protocol в потоковом режиме, когда Chrome это поддерживает, обходит безопасные UI-состояния с откатом и проверяется реальным headless Chrome через `tests/browser-integration.mjs`.
 
 ### Лицензия
 
