@@ -8,7 +8,7 @@ Research-grade Chrome extension for reproducible offline web archives, API snaps
 
 ## Website
 
-https://github.com/hizyyo/sitesaver
+https://github.com/hizyyo/OpenSave
 
 ## Topics
 
