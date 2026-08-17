@@ -2,7 +2,7 @@
 
 ## Overview
 
-SiteSaver is a no-build Manifest V3 Chrome extension with three runtime layers:
+SiteSaver → **openSave** is a no-build Manifest V3 Chrome extension with three runtime layers:
 
 ```text
 Side Panel -> Service Worker -> Chrome DevTools Protocol -> Active Tab

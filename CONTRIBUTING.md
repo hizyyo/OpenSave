@@ -1,4 +1,4 @@
-# Contributing to SiteSaver
+# Contributing to openSave
 
 Thanks for helping make offline web capture more reproducible.
 
@@ -14,7 +14,7 @@ Thanks for helping make offline web capture more reproducible.
 2. Open `chrome://extensions`.
 3. Enable Developer mode.
 4. Click **Load unpacked** and select this repository folder.
-5. After editing extension files, click Reload on the SiteSaver card.
+5. After editing extension files, click Reload on the openSave card.
 
 The project has no build step. `background.js`, `sidepanel.js`, and `sidepanel.html` are loaded directly by Chrome.
 

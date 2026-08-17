@@ -512,7 +512,7 @@ self.addEventListener('fetch', (event) => {
     const cached = await cache.match(request, { ignoreSearch: false });
     if (cached) return cached;
     if (url.origin !== self.location.origin || request.method !== 'GET') {
-      return new Response(null, { status: 503, statusText: 'External network blocked by SiteSaver' });
+      return new Response(null, { status: 503, statusText: 'External network blocked by openSave' });
     }
     return new Response(null, { status: 404, statusText: 'Resource was not saved' });
   })());
@@ -520,7 +520,7 @@ self.addEventListener('fetch', (event) => {
 }
 
 function createArchiveReadme() {
-  return `SiteSaver Offline Archive
+  return `openSave Offline Archive
 
 This folder is a static web archive. It does not require Node.js or a build step.
 

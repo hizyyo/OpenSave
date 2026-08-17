@@ -2,7 +2,7 @@
 
 ## Scope
 
-SiteSaver has broad permissions because it captures resources from the active browser tab. Security issues involving the Chrome extension, archive output, service-worker replay, or unintended network access are in scope.
+openSave has broad permissions because it captures resources from the active browser tab. Security issues involving the Chrome extension, archive output, service-worker replay, or unintended network access are in scope.
 
 ## Reporting a Vulnerability
 

@@ -1,6 +1,6 @@
-# SiteSaver Test Harness
+# openSave Test Harness
 
-SiteSaver uses two complementary archive checks.
+SiteSaver → **openSave** uses two complementary archive checks.
 
 It also has a focused regression check for delayed, non-semantic start overlays used by WebGL and 3D experiences.
 
@@ -60,7 +60,7 @@ The current comparison uses SHA-256 byte equality. Use it for deterministic fixt
 
 ## Fixture
 
-`tests/fixtures/offline-archive/` is a minimal valid SiteSaver archive. It keeps CI independent from external sites and is used by `.github/workflows/validate.yml`.
+`tests/fixtures/offline-archive/` is a minimal valid openSave archive. It keeps CI independent from external sites and is used by `.github/workflows/validate.yml`.
 
 ## Adding a Regression Fixture
 

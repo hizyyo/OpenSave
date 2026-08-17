@@ -1,8 +1,15 @@
 # Changelog
 
-All notable changes to SiteSaver are documented here.
+All notable changes to openSave are documented here.
 
 ## Unreleased
+
+## [1.0.0] - 2026-08-17
+
+### Changed
+
+- Renamed the extension from **SiteSaver** to **openSave**.
+- Rewrote the README with polished branding, badges, and capture-mode documentation.
 
 ## [3.2.1] - 2026-08-11
 

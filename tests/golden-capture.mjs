@@ -25,7 +25,7 @@ if (!failures.length) {
   if (/<script\b[^>]*\bsrc=["']https?:\/\//i.test(html)) failures.push('Remote executable script remains');
   if (/<link\b(?=[^>]*\brel=["'][^"']*stylesheet)[^>]*\bhref=["']https?:\/\//i.test(html)) failures.push('Remote stylesheet remains');
   if (!replay.includes("navigator.serviceWorker.register('/sitesaver-sw.js')")) failures.push('Offline bootstrap does not register the service worker');
-  if (!worker.includes("External network blocked by SiteSaver")) failures.push('Service worker does not block external network');
+  if (!worker.includes("External network blocked by openSave")) failures.push('Service worker does not block external network');
   if (!worker.includes("request.mode === 'navigate'")) failures.push('Service worker is missing SPA navigation fallback');
   if (!report.completeness || typeof report.completeness.score !== 'number') failures.push('Completeness score is missing');
   const manifest = JSON.parse(readFileSync(join(archivePath, 'sitesaver-manifest.json'), 'utf8'));
