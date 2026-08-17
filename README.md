@@ -1,5 +1,9 @@
 # openSave
 
+<p align="center">
+  <img src="logo.png" width="160" alt="openSave logo">
+</p>
+
 A Chrome extension that captures the page you're looking at and saves it as a complete offline copy. HTML, CSS, JS, fonts, images, 3D models, API responses — everything the browser actually received goes into one `.zip` you can open from any static server. No build step, no Node.js, no backend.
 
 ## Why this exists
