@@ -8,7 +8,7 @@ if (!archivePath) {
   process.exit(2);
 }
 
-const required = ['index.html', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'README.txt'];
+const required = ['index.html', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'README.txt', 'open-windows.bat', 'open-windows.ps1', 'open-unix.sh'];
 const failures = [];
 
 for (const filename of required) {

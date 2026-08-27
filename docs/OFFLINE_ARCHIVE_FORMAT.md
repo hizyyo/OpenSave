@@ -15,6 +15,9 @@ An archive is portable, static, and inspectable. It should work from any static 
 | `sitesaver-report.json` | Capture diagnostics and completeness score. |
 | `sitesaver-manifest.json` | Archive metadata. |
 | `README.txt` | Hosting instructions for the archive recipient. |
+| `open-windows.bat` | Windows launcher. |
+| `open-windows.ps1` | Windows fallback static server. |
+| `open-unix.sh` | macOS/Linux launcher. |
 
 ## Resource Layout
 
@@ -49,3 +52,5 @@ Query strings are represented by a deterministic short hash in the filename. Thi
 ## Hosting Requirements
 
 Serve the archive from the origin root over HTTP(S). The generated service worker requires a secure context on production hosts; `localhost` is treated as secure by modern browsers. Do not rely on `file://`.
+
+The archive is not a Node.js project. It intentionally does not include `package.json`; use the generated launcher scripts or any static HTTP server.

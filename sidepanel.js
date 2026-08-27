@@ -524,7 +524,17 @@ function createArchiveReadme() {
 
 This folder is a static web archive. It does not require Node.js or a build step.
 
-Serve this folder from any static HTTP(S) host at the host root to enable the generated service worker, SPA fallback, and saved API responses. Opening index.html through file:// is not supported because service workers and ES modules require HTTP(S).
+Do not run npm install or npm run dev here. This archive is not a Node.js project and intentionally has no package.json.
+
+Windows
+- Double-click open-windows.bat.
+- It opens the archive at http://127.0.0.1:4173/ and serves it locally.
+
+macOS / Linux
+- Run: sh open-unix.sh
+- Or serve the folder yourself with any static server at the origin root.
+
+Opening index.html through file:// is not supported because service workers and ES modules require HTTP(S).
 
 Files
 - index.html: captured entry document
@@ -534,6 +544,137 @@ Files
 - sitesaver-offline.js: offline bootstrap
 - sitesaver-report.json: capture diagnostics and completeness score
 - sitesaver-manifest.json: archive metadata
+- open-windows.bat / open-windows.ps1: Windows local launcher
+- open-unix.sh: macOS/Linux local launcher
+`;
+}
+
+function createWindowsBatchLauncher() {
+  return `@echo off
+setlocal
+cd /d "%~dp0"
+set PORT=4173
+
+where py >nul 2>nul
+if %ERRORLEVEL%==0 (
+  start "" "http://127.0.0.1:%PORT%/"
+  py -3 -m http.server %PORT% --bind 127.0.0.1
+  exit /b %ERRORLEVEL%
+)
+
+where python >nul 2>nul
+if %ERRORLEVEL%==0 (
+  start "" "http://127.0.0.1:%PORT%/"
+  python -m http.server %PORT% --bind 127.0.0.1
+  exit /b %ERRORLEVEL%
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0open-windows.ps1" -Port %PORT%
+`;
+}
+
+function createWindowsPowerShellLauncher() {
+  return `param([int]$Port = 4173)
+$ErrorActionPreference = 'Stop'
+
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$prefix = 'http://127.0.0.1:' + $Port + '/'
+$listener = [System.Net.HttpListener]::new()
+$listener.Prefixes.Add($prefix)
+
+try {
+  $listener.Start()
+} catch {
+  Write-Host 'Could not start the local archive server.'
+  Write-Host $_.Exception.Message
+  Read-Host 'Press Enter to close'
+  exit 1
+}
+
+$mime = @{
+  '.html' = 'text/html; charset=utf-8'
+  '.js' = 'text/javascript; charset=utf-8'
+  '.css' = 'text/css; charset=utf-8'
+  '.json' = 'application/json; charset=utf-8'
+  '.svg' = 'image/svg+xml'
+  '.png' = 'image/png'
+  '.jpg' = 'image/jpeg'
+  '.jpeg' = 'image/jpeg'
+  '.webp' = 'image/webp'
+  '.gif' = 'image/gif'
+  '.ico' = 'image/x-icon'
+  '.wasm' = 'application/wasm'
+  '.woff' = 'font/woff'
+  '.woff2' = 'font/woff2'
+  '.glb' = 'model/gltf-binary'
+  '.gltf' = 'model/gltf+json'
+}
+
+Start-Process $prefix
+Write-Host ('openSave archive server: ' + $prefix)
+Write-Host 'Press Ctrl+C to stop.'
+
+while ($listener.IsListening) {
+  $context = $listener.GetContext()
+  $bytes = $null
+  $full = $null
+  try {
+    $requestPath = [Uri]::UnescapeDataString($context.Request.Url.AbsolutePath.TrimStart('/'))
+    if ([string]::IsNullOrWhiteSpace($requestPath)) { $requestPath = 'index.html' }
+
+    $candidate = Join-Path $root $requestPath
+    $resolvedRoot = [System.IO.Path]::GetFullPath($root)
+    $full = [System.IO.Path]::GetFullPath($candidate)
+    if (-not $full.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Path escaped archive root' }
+
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+      if ([System.IO.Path]::GetExtension($requestPath)) {
+        $context.Response.StatusCode = 404
+        $bytes = [Text.Encoding]::UTF8.GetBytes('Not found')
+      } else {
+        $full = Join-Path $root 'index.html'
+        $bytes = [IO.File]::ReadAllBytes($full)
+      }
+    } else {
+      $bytes = [IO.File]::ReadAllBytes($full)
+    }
+
+    $ext = [IO.Path]::GetExtension($full).ToLowerInvariant()
+    $context.Response.ContentType = if ($mime.ContainsKey($ext)) { $mime[$ext] } else { 'application/octet-stream' }
+  } catch {
+    $context.Response.StatusCode = 500
+    $bytes = [Text.Encoding]::UTF8.GetBytes($_.Exception.Message)
+    $context.Response.ContentType = 'text/plain; charset=utf-8'
+  }
+
+  $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+  $context.Response.Close()
+}
+`;
+}
+
+function createUnixLauncher() {
+  return `#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")"
+PORT="\${PORT:-4173}"
+URL="http://127.0.0.1:$PORT/"
+
+open_url() {
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 || true; fi
+  if command -v open >/dev/null 2>&1; then open "$URL" >/dev/null 2>&1 || true; fi
+}
+
+if command -v python3 >/dev/null 2>&1; then
+  (sleep 1; open_url) &
+  python3 -m http.server "$PORT" --bind 127.0.0.1
+elif command -v python >/dev/null 2>&1; then
+  (sleep 1; open_url) &
+  python -m http.server "$PORT" --bind 127.0.0.1
+else
+  echo "Python is required to run this launcher. Serve this folder with any static HTTP server."
+  exit 1
+fi
 `;
 }
 
@@ -964,6 +1105,9 @@ async function capture(action = 'fullCapture') {
       apiSnapshotCount: replaySnapshots.length
     }, null, 2));
     zip.file('README.txt', createArchiveReadme());
+    zip.file('open-windows.bat', createWindowsBatchLauncher());
+    zip.file('open-windows.ps1', createWindowsPowerShellLauncher());
+    zip.file('open-unix.sh', createUnixLauncher(), { unixPermissions: '755' });
     replaySnapshots.forEach((snapshot) => {
       zip.file(snapshot.localPath.slice(1), snapshot.body, snapshot.base64Encoded ? { base64: true } : undefined);
     });

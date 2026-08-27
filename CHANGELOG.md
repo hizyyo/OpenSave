@@ -4,6 +4,13 @@ All notable changes to openSave are documented here.
 
 ## Unreleased
 
+## [1.0.1] - 2026-08-27
+
+### Added
+
+- Generated archives now include `open-windows.bat`, `open-windows.ps1`, and `open-unix.sh` launchers so users can run the offline copy directly without creating a Node.js project.
+- Archive README now explicitly says not to run `npm install` or `npm run dev` inside the capture output.
+
 ## [1.0.0] - 2026-08-17
 
 ### Changed

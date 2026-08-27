@@ -12,6 +12,8 @@ A Chrome extension that captures the page you're looking at and saves it as a co
 
 The archive is a static folder. Serve it with any static host (or just `python3 -m http.server`) and the included service worker handles routing, saved API responses, and blocks any attempt to reach the live network.
 
+Captured archives are not Node.js projects. Do not run `npm install` or `npm run dev` inside them. New archives include `open-windows.bat`, `open-windows.ps1`, and `open-unix.sh` launchers for local viewing.
+
 ## Install
 
 1. Open `chrome://extensions`
@@ -52,10 +54,13 @@ site.zip
 ├── sitesaver-sw.js             offline service worker
 ├── sitesaver-report.json       completeness score + diagnostics
 ├── sitesaver-manifest.json     archive metadata
+├── open-windows.bat            Windows launcher
+├── open-windows.ps1            Windows fallback server
+├── open-unix.sh                macOS/Linux launcher
 └── README.txt
 ```
 
-`site-saver-report.json` has a completeness score and lists anything that couldn't be saved, so you know what's missing before you share the archive.
+`sitesaver-report.json` has a completeness score and lists anything that couldn't be saved, so you know what's missing before you share the archive.
 
 ## What it can't do
 

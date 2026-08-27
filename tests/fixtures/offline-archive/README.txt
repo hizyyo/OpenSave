@@ -1,3 +1,6 @@
-SiteSaver Offline Archive
+openSave Offline Archive
 
-Serve this folder from a static HTTP(S) host. Node.js is not required by the archive.
+Do not run npm install or npm run dev here. This archive is not a Node.js project.
+
+Windows: double-click open-windows.bat.
+macOS/Linux: run sh open-unix.sh.
