@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "openSave",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minimum_chrome_version": "125",
   "description": "Capture pages and sites as reproducible offline archives with assets, API snapshots, and reports.",
   "permissions": ["downloads", "activeTab", "storage", "debugger", "sidePanel", "unlimitedStorage"],

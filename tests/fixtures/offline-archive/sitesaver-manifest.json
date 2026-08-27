@@ -3,6 +3,6 @@
   "version": 1,
   "sourceUrl": "https://fixture.example/",
   "captureMode": "deep",
-  "resourceCount": 0,
+  "resourceCount": 1,
   "apiSnapshotCount": 0
 }

@@ -4,6 +4,14 @@ All notable changes to openSave are documented here.
 
 ## Unreleased
 
+## [1.0.3] - 2026-08-27
+
+### Fixed
+
+- Captured same-origin pages now have explicit offline route mappings. Navigating to `/card`, `/defi`, `/security`, `/guides`, `/download`, or another saved page returns that page instead of always returning the root `index.html`.
+- Static-host requests from Barba-style routers can resolve saved page HTML without a full navigation.
+- Offline service-worker cache names are unique per archive and stale openSave archive caches are removed during activation.
+
 ## [1.0.2] - 2026-08-27
 
 ### Fixed

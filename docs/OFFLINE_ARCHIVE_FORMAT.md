@@ -54,3 +54,5 @@ Query strings are represented by a deterministic short hash in the filename. Thi
 Serve the archive from the origin root over HTTP(S). The generated service worker requires a secure context on production hosts; `localhost` is treated as secure by modern browsers. Do not rely on `file://`.
 
 The archive is not a Node.js project. It intentionally does not include `package.json`; use the generated launcher scripts or any static HTTP server.
+
+Deep archives map each captured same-origin page route to its saved HTML file. Unknown routes still fall back to root `index.html` for client-side SPAs.

@@ -35,10 +35,11 @@ function renderReport(report) {
   const missing = (report.unresolvedResources || []).length;
   const pages = (report.unavailablePages || []).length;
   const truncated = (report.truncatedDiscovery || []).length;
+  const savedPageCount = report.savedPageCount;
   const completeness = report.completeness;
   const diagnostics = (report.networkFailures || []).length + (report.httpErrors || []).length + (report.unreadableResponses || []).length;
   reportEl.style.display = 'block';
-  reportEl.innerHTML = `<strong>Отчёт захвата</strong><br>${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
+  reportEl.innerHTML = `<strong>Отчёт захвата</strong><br>${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
 }
 
 function addReportItem(report, type, item) {
@@ -494,6 +495,15 @@ function createSpaFallback() {
 
 function createOfflineServiceWorker(resources, snapshots) {
   const precache = ['/', '/index.html', '/404.html', '/sitesaver-offline.js', '/sitesaver-sw.js', ...resources.map((resource) => `/${resource.localPath}`), ...snapshots.map((snapshot) => snapshot.localPath)];
+  const pageRoutes = {};
+  resources.forEach((resource) => {
+    if (!(resource.mimeType || '').toLowerCase().startsWith('text/html')) return;
+    const url = new URL(resource.url);
+    const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+    const key = pathname + url.search;
+    if (key !== '/') pageRoutes[key] = `/${resource.localPath}`;
+  });
+  const cacheName = `sitesaver-offline-${Date.now().toString(36)}-${shortHash(precache.join('\n'))}`;
   const apiSnapshots = snapshots.map((snapshot) => ({
     method: snapshot.method,
     url: snapshot.url,
@@ -504,9 +514,10 @@ function createOfflineServiceWorker(resources, snapshots) {
     localPath: snapshot.localPath
   }));
 
-  return `const CACHE = 'sitesaver-offline-v1';
+  return `const CACHE = ${JSON.stringify(cacheName)};
 const PRECACHE = ${JSON.stringify([...new Set(precache)])};
 const SNAPSHOTS = ${JSON.stringify(apiSnapshots)};
+const PAGE_ROUTES = ${JSON.stringify(pageRoutes)};
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -518,7 +529,11 @@ self.addEventListener('install', (event) => {
   })());
 });
 
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (event) => event.waitUntil((async () => {
+  const names = await caches.keys();
+  await Promise.all(names.filter((name) => name.startsWith('sitesaver-offline-') && name !== CACHE).map((name) => caches.delete(name)));
+  await self.clients.claim();
+})()));
 
 const bodyFor = async (request) => {
   if (request.method === 'GET' || request.method === 'HEAD') return '';
@@ -536,6 +551,11 @@ const findSnapshot = (requestUrl, method, body) => {
   });
 };
 
+const routeKey = (url) => {
+  const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+  return pathname + url.search;
+};
+
 self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const request = event.request;
@@ -543,7 +563,22 @@ self.addEventListener('fetch', (event) => {
     const cache = await caches.open(CACHE);
 
     if (request.mode === 'navigate') {
+      const exact = await cache.match(request, { ignoreSearch: false });
+      if (exact) return exact;
+      const pagePath = PAGE_ROUTES[routeKey(url)];
+      if (pagePath) {
+        const page = await cache.match(pagePath);
+        if (page) return page;
+      }
       return (await cache.match('/index.html')) || new Response('Offline archive is incomplete', { status: 503 });
+    }
+
+    if (request.method === 'GET') {
+      const pagePath = PAGE_ROUTES[routeKey(url)];
+      if (pagePath) {
+        const page = await cache.match(pagePath);
+        if (page) return page;
+      }
     }
 
     const snapshot = findSnapshot(request.url, request.method, await bodyFor(request));
@@ -1117,6 +1152,16 @@ async function capture(action = 'fullCapture') {
     const catalog = createCatalog(bodies, pageUrl);
     const fetched = await collectMissingFiles(html, pageUrl, catalog, captureReport, capturedMode === 'deep');
     log(`Дозагружено ссылок и ресурсов: ${fetched}`);
+    const pageOrigin = new URL(pageUrl).origin;
+    const savedPageCount = catalog.resources.filter((resource) => {
+      try {
+        return (resource.mimeType || '').toLowerCase().startsWith('text/html') && new URL(resource.url).origin === pageOrigin;
+      } catch (error) {
+        return false;
+      }
+    }).length;
+    captureReport.savedPageCount = savedPageCount;
+    log(`Сохранено HTML-страниц: ${savedPageCount}`);
 
     const replaySnapshots = apiSnapshots.map((snapshot) => ({
       ...snapshot,
@@ -1148,6 +1193,7 @@ async function capture(action = 'fullCapture') {
       captureMode: capturedMode,
       capturedAt: new Date().toISOString(),
       resourceCount: catalog.resources.length,
+      pageCount: savedPageCount,
       apiSnapshotCount: replaySnapshots.length
     }, null, 2));
     zip.file('README.txt', createArchiveReadme());

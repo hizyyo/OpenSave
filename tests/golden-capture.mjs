@@ -27,6 +27,7 @@ if (!failures.length) {
   if (!replay.includes("navigator.serviceWorker.register('/sitesaver-sw.js')")) failures.push('Offline bootstrap does not register the service worker');
   if (!worker.includes("External network blocked by openSave")) failures.push('Service worker does not block external network');
   if (!worker.includes("request.mode === 'navigate'")) failures.push('Service worker is missing SPA navigation fallback');
+  if (!worker.includes('PAGE_ROUTES')) failures.push('Service worker is missing captured-page route mapping');
   if (!report.completeness || typeof report.completeness.score !== 'number') failures.push('Completeness score is missing');
   const manifest = JSON.parse(readFileSync(join(archivePath, 'sitesaver-manifest.json'), 'utf8'));
   if (manifest.format !== 'sitesaver-offline-archive' || !manifest.sourceUrl) failures.push('Archive manifest is incomplete');

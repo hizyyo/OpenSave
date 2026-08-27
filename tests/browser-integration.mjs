@@ -18,6 +18,10 @@ if (!existsSync(chromePath)) {
   process.exit(2);
 }
 
+const archiveManifest = JSON.parse(readFileSync(join(resolve(archiveDirectory), 'sitesaver-manifest.json'), 'utf8'));
+const sourceHost = new URL(archiveManifest.sourceUrl).hostname;
+const savedCardPath = join(resolve(archiveDirectory), 'assets', sourceHost, 'card.html');
+
 const mimeTypes = {
   '.avif': 'image/avif', '.css': 'text/css', '.gif': 'image/gif', '.html': 'text/html', '.js': 'text/javascript',
   '.json': 'application/json', '.mjs': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml',
@@ -156,6 +160,12 @@ try {
   await cdp.command('Runtime.evaluate', { expression: 'navigator.serviceWorker.ready', awaitPromise: true });
   const rootPage = await cdp.command('Runtime.evaluate', { expression: '({ text: document.body.innerText.slice(0, 200), controlled: Boolean(navigator.serviceWorker.controller) })', returnByValue: true });
   const rootErrorCount = consoleErrors.length + exceptions.length;
+  let savedPage;
+  if (existsSync(savedCardPath)) {
+    await cdp.command('Page.navigate', { url: `http://127.0.0.1:${staticPort}/card` });
+    await delay(1000);
+    savedPage = await cdp.command('Runtime.evaluate', { expression: 'document.body.innerText.slice(0, 200)', returnByValue: true });
+  }
   await cdp.command('Page.navigate', { url: `http://127.0.0.1:${staticPort}/sitesaver-test-route` });
   await delay(1500);
 
@@ -175,6 +185,7 @@ try {
   if (!page.result.value.controlled) failures.push('Service worker did not control the offline archive after navigation');
   if (!rootPage.result.value.text) failures.push('Root route rendered an empty document');
   if (rootErrorCount) failures.push('Root route produced console or runtime errors before SPA navigation');
+  if (savedPage && !/card/i.test(savedPage.result.value || '')) failures.push('Saved page route did not render its captured HTML');
   if (!page.result.value.text) failures.push('SPA route rendered an empty document');
   if (externalRequests.length) failures.push(`External network requests: ${[...new Set(externalRequests)].join(', ')}`);
   if (exceptions.length) failures.push(`Runtime exceptions: ${exceptions.map((entry) => entry.text).join('; ')}`);
@@ -193,6 +204,7 @@ try {
     serviceWorkerControlled: page.result.value.controlled,
     rootText: rootPage.result.value.text,
     routeText: page.result.value.text,
+    savedPageText: savedPage && savedPage.result.value,
     screenshot: screenshotPath,
     screenshotHash
   };
