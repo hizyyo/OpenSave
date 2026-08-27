@@ -4,6 +4,13 @@ All notable changes to openSave are documented here.
 
 ## Unreleased
 
+## [1.0.2] - 2026-08-27
+
+### Fixed
+
+- Deep capture now returns structured `Runtime.evaluate` results by value. Hover, scrolling, interactive-state, scenario, and start-overlay counters no longer fall back to zero.
+- Canvas fallback arrays are now transferred from the inspected page, allowing generated canvas screenshots to reach the archive.
+
 ## [1.0.1] - 2026-08-27
 
 ### Added

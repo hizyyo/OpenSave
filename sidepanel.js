@@ -12,7 +12,7 @@ const captureModeEl = document.getElementById('captureMode');
 const MAX_FALLBACK_RESOURCES = 400;
 const MAX_PAGES = 40;
 const MAX_FALLBACK_FILE_SIZE = 200 * 1024 * 1024;
-const CSS_URL_EXPRESSION = /(?:url\(\s*|@import\s+(?:url\(\s*)?)["']?([^"'()\s]+)["']?\s*\)?/gi;
+const CSS_URL_EXPRESSION = /(?:url\(\s*|@import\s+(?:url\(\s*)?)(?:(["'])(.*?)\1|([^"'()\s]+))\s*\)?/gi;
 const GLTF_EXTENSION = /\.gltf(?:$|[?#])/i;
 const JAVASCRIPT_IMPORT_EXPRESSION = /(?:\bimport\s*\(\s*|\bimport\s+(?:[^'"`]*?\s+from\s+)?|\bimportScripts\s*\(\s*|\bnew\s+(?:Shared)?Worker\s*\(\s*|\bnew\s+URL\s*\(\s*)["']([^"'`\s]+)["']/gi;
 const SOURCE_MAP_EXPRESSION = /\/\/[#@]\s*sourceMappingURL=([^\s]+)/gi;
@@ -163,7 +163,7 @@ function extractCssUrls(css, baseUrl) {
   const urls = new Set();
   let match;
   while ((match = CSS_URL_EXPRESSION.exec(css || '')) !== null) {
-    const value = match[1];
+    const value = match[2] || match[3];
     if (/^(?:data:|blob:|#)/i.test(value)) continue;
     try {
       const url = normalizeUrl(new URL(value, baseUrl).href);
@@ -260,9 +260,11 @@ function localPathFor(value, baseUrl, byUrl) {
 }
 
 function rewriteCssUrls(css, baseUrl, byUrl) {
-  return (css || '').replace(CSS_URL_EXPRESSION, (whole, value) => {
+  return (css || '').replace(CSS_URL_EXPRESSION, (whole, quote, quotedValue, unquotedValue) => {
+    const value = quotedValue || unquotedValue;
     const localPath = localPathFor(value, baseUrl, byUrl);
-    return localPath === value ? whole : whole.replace(value, localPath);
+    if (localPath !== value) return whole.replace(value, localPath);
+    return isHttpUrl(value) ? whole.replace(value, 'data:,') : whole;
   });
 }
 
@@ -355,9 +357,9 @@ function rewriteGltfUrls(gltf, baseUrl, byUrl) {
 
 function rewriteHtmlResource(html, baseUrl, byUrl) {
   const document = new DOMParser().parseFromString(html, 'text/html');
-  const attributes = ['src', 'href', 'data', 'poster'];
+  const attributes = ['src', 'href', 'data', 'poster', 'data-src'];
 
-  document.querySelectorAll('[src], [href], [data], [poster]').forEach((element) => {
+  document.querySelectorAll('[src], [href], [data], [poster], [data-src]').forEach((element) => {
     for (const attribute of attributes) {
       if (!element.hasAttribute(attribute)) continue;
       const value = element.getAttribute(attribute);
@@ -366,17 +368,61 @@ function rewriteHtmlResource(html, baseUrl, byUrl) {
     }
   });
 
+  // Rewritten resources no longer match the publisher's original SRI hashes.
+  document.querySelectorAll('[integrity]').forEach((element) => element.removeAttribute('integrity'));
+  document.querySelectorAll('meta[http-equiv]').forEach((element) => {
+    if ((element.getAttribute('http-equiv') || '').toLowerCase() === 'content-security-policy') element.remove();
+  });
+  document.querySelectorAll('base').forEach((element) => element.remove());
+
+  const scriptSources = new Set();
+  document.querySelectorAll('script[src]').forEach((element) => {
+    const source = element.getAttribute('src') || '';
+    if (/^https?:/i.test(source) || scriptSources.has(source)) {
+      element.remove();
+      return;
+    }
+    scriptSources.add(source);
+  });
+  document.querySelectorAll('link[href]').forEach((element) => {
+    const rel = (element.getAttribute('rel') || '').toLowerCase();
+    if (/^https?:/i.test(element.getAttribute('href') || '') && /\b(?:stylesheet|modulepreload|preload|manifest|icon)\b/.test(rel)) element.remove();
+  });
+  document.querySelectorAll('iframe[src]').forEach((element) => {
+    if (/^https?:/i.test(element.getAttribute('src') || '')) element.removeAttribute('src');
+  });
+  document.querySelectorAll('img[src], img[data-src], source[src], source[data-src], video[src], audio[src], track[src], object[data], embed[src], input[src], video[poster]').forEach((element) => {
+    for (const attribute of ['src', 'data-src', 'data', 'poster']) {
+      if (/^https?:/i.test(element.getAttribute(attribute) || '')) element.removeAttribute(attribute);
+    }
+  });
+
   document.querySelectorAll('script:not([src])').forEach((element) => {
     element.textContent = rewriteJavaScriptUrls(element.textContent, baseUrl, byUrl);
   });
 
-  document.querySelectorAll('[srcset]').forEach((element) => {
-    const sourceSet = element.getAttribute('srcset').split(',').map((candidate) => {
-      const parts = candidate.trim().split(/\s+/);
-      const localPath = localPathFor(parts[0], baseUrl, byUrl);
-      return [localPath, ...parts.slice(1)].join(' ');
-    });
-    element.setAttribute('srcset', sourceSet.join(', '));
+  const inlineScriptSources = new Set();
+  document.querySelectorAll('script:not([src])').forEach((element) => {
+    const source = element.textContent || '';
+    const expression = /(?:\.src\s*=|setAttribute\(\s*['"]src['"]\s*,)\s*['"]([^'"]+)['"]/gi;
+    let match;
+    while ((match = expression.exec(source)) !== null) inlineScriptSources.add(match[1]);
+  });
+  document.querySelectorAll('script[src]').forEach((element) => {
+    if (inlineScriptSources.has(element.getAttribute('src') || '')) element.remove();
+  });
+
+  document.querySelectorAll('[srcset], [data-srcset]').forEach((element) => {
+    for (const attribute of ['srcset', 'data-srcset']) {
+      if (!element.hasAttribute(attribute)) continue;
+      const sourceSet = element.getAttribute(attribute).split(',').map((candidate) => {
+        const parts = candidate.trim().split(/\s+/);
+        const localPath = localPathFor(parts[0], baseUrl, byUrl);
+        return [localPath, ...parts.slice(1)].join(' ');
+      });
+      if (sourceSet.some((candidate) => /^https?:/i.test(candidate))) element.removeAttribute(attribute);
+      else element.setAttribute(attribute, sourceSet.join(', '));
+    }
   });
 
   document.querySelectorAll('style').forEach((element) => {
@@ -390,11 +436,11 @@ function rewriteHtmlResource(html, baseUrl, byUrl) {
 }
 
 function injectOfflineBootstrap(html) {
-  const script = '<script src="/sitesaver-offline.js"></script>';
+  const bootstrap = '<meta http-equiv="Content-Security-Policy" content="default-src \'self\' data: blob:; script-src \'self\' \'unsafe-inline\' \'unsafe-eval\' blob:; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data: blob:; media-src \'self\' data: blob:; font-src \'self\' data:; connect-src \'self\'; frame-src \'self\'; worker-src \'self\' blob:; object-src \'none\'; form-action \'none\'; base-uri \'self\'"><script src="/sitesaver-offline.js"></script>';
   if (/<head(?:\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${script}`);
+    return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${bootstrap}`);
   }
-  return `${script}${html}`;
+  return `${bootstrap}${html}`;
 }
 
 function resourceText(resource) {

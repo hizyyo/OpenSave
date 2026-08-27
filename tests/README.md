@@ -10,6 +10,10 @@ node tests/start-overlay-regression.mjs
 
 This check ensures Deep capture activates a visible startup control before generic UI exploration, waits for delayed loaders, and does not treat links or forms as safe startup controls.
 
+`tests/deep-runtime-regression.mjs` ensures every Deep-stage `Runtime.evaluate` call that returns an object or array uses `returnByValue: true`. Without it, CDP returns only a remote object handle and the side panel receives misleading zero counters or empty canvas snapshots.
+
+`tests/archive-safety-regression.mjs` guards SRI removal, same-origin offline CSP, lazy `data-src` rewriting, quoted CSS URLs, and duplicate/external script filtering.
+
 ## Golden Archive Check
 
 The golden check validates archive structure without launching a browser.

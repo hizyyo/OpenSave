@@ -801,6 +801,7 @@ async function replayScenario(tabId, scenario) {
       })()
     `,
     awaitPromise: true,
+    returnByValue: true,
     userGesture: true
   });
   return result.result.value || { total: scenario.length, replayed: 0 };
@@ -840,6 +841,7 @@ async function activateStartOverlay(tabId) {
       })()
     `,
     awaitPromise: true,
+    returnByValue: true,
     userGesture: true
   });
   return result.result.value || { clicked: 0, waited: 0 };
@@ -912,7 +914,8 @@ async function scrollForLazyResources(tabId) {
         return { containers: containers().length };
       })()
     `,
-    awaitPromise: true
+    awaitPromise: true,
+    returnByValue: true
   });
   return result.result.value || { containers: 0 };
 }
@@ -949,6 +952,7 @@ async function exploreHoverStates(tabId) {
       })()
     `,
     awaitPromise: true,
+    returnByValue: true,
     userGesture: true
   });
   return result.result.value || { hovered: 0 };
@@ -977,7 +981,8 @@ async function captureCanvasFallback(tabId) {
         return snapshots;
       })()
     `,
-    awaitPromise: true
+    awaitPromise: true,
+    returnByValue: true
   });
   return result.result.value || [];
 }
@@ -1114,6 +1119,7 @@ async function exploreInteractiveElements(tabId) {
       })()
     `,
     awaitPromise: true,
+    returnByValue: true,
     userGesture: true
   });
   return result.result.value || { clicked: 0, skipped: 0 };

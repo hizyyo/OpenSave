@@ -25,8 +25,14 @@ jobs:
           node --check tests/golden-capture.mjs
           node --check tests/browser-integration.mjs
           node --check tests/start-overlay-regression.mjs
+          node --check tests/deep-runtime-regression.mjs
+          node --check tests/archive-safety-regression.mjs
       - name: Start-overlay regression check
         run: node tests/start-overlay-regression.mjs
+      - name: Deep runtime regression check
+        run: node tests/deep-runtime-regression.mjs
+      - name: Archive safety regression check
+        run: node tests/archive-safety-regression.mjs
       - name: Golden archive check
         run: node tests/golden-capture.mjs tests/fixtures/offline-archive
       - name: Browser integration check
