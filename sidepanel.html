@@ -9,6 +9,7 @@ h1{font-size:16px;margin-bottom:2px}
 .btn{width:100%;padding:10px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:8px}
 .btn-capture{background:#22c55e;color:#000}
 .btn-secondary{background:#252a35;color:#e4ded7}
+.btn-cancel{background:#3a1d22;color:#fecaca}
 .btn-capture:disabled{background:#333;color:#666;cursor:not-allowed}
 .capture-mode{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 10px}
 .capture-mode label{display:block;cursor:pointer;border:1px solid #303747;border-radius:6px;padding:8px;background:#15171e}
@@ -38,6 +39,7 @@ h1{font-size:16px;margin-bottom:2px}
 <button class="btn btn-secondary" id="btnPickElement">Выбрать блок на странице</button>
 <button class="btn btn-secondary" id="btnRecord">Записать сценарий</button>
 <button class="btn btn-capture" id="btnFinishScenario" hidden>Остановить и захватить</button>
+<button class="btn btn-cancel" id="btnCancelCapture" hidden>Отменить захват</button>
 <div class="progress" id="progress">
   <div class="status" id="status">Подготовка...</div>
   <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
@@ -45,5 +47,9 @@ h1{font-size:16px;margin-bottom:2px}
 <div class="log" id="log"></div>
 <div class="report" id="report"></div>
 <script src="lib/jszip.min.js"></script>
+<script src="capture-graph.js"></script>
+<script src="capture-storage.js"></script>
+<script src="resource-parser.js"></script>
+<script src="rendered-page-crawler.js"></script>
 <script src="sidepanel.js"></script>
 </body></html>
