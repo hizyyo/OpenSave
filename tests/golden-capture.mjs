@@ -8,7 +8,7 @@ if (!archivePath) {
   process.exit(2);
 }
 
-const required = ['index.html', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'README.txt', 'open-windows.bat', 'open-windows.ps1', 'open-unix.sh'];
+const required = ['index.html', 'replay-matcher.js', 'replay-misses.json', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'README.txt', 'open-windows.bat', 'open-windows.ps1', 'open-unix.sh'];
 const failures = [];
 
 for (const filename of required) {
@@ -20,6 +20,7 @@ if (!failures.length) {
   const replay = readFileSync(join(archivePath, 'sitesaver-offline.js'), 'utf8');
   const worker = readFileSync(join(archivePath, 'sitesaver-sw.js'), 'utf8');
   const report = JSON.parse(readFileSync(join(archivePath, 'sitesaver-report.json'), 'utf8'));
+  const replayMisses = JSON.parse(readFileSync(join(archivePath, 'replay-misses.json'), 'utf8'));
 
   if (/assets\/[^"']*index\.htmlassets/i.test(html)) failures.push('Corrupted root URL rewrite detected');
   if (/<script\b[^>]*\bsrc=["']https?:\/\//i.test(html)) failures.push('Remote executable script remains');
@@ -28,6 +29,8 @@ if (!failures.length) {
   if (!worker.includes("External network blocked by openSave")) failures.push('Service worker does not block external network');
   if (!worker.includes("request.mode === 'navigate'")) failures.push('Service worker is missing SPA navigation fallback');
   if (!worker.includes('PAGE_ROUTES')) failures.push('Service worker is missing captured-page route mapping');
+  if (!worker.includes('OpenSaveReplayMatcher.createMatcher')) failures.push('Service worker is missing exact request matching');
+  if (!Array.isArray(replayMisses.captureMisses) || !Array.isArray(replayMisses.runtimeMisses)) failures.push('Replay miss ledger is invalid');
   if (!report.completeness || typeof report.completeness.score !== 'number') failures.push('Completeness score is missing');
   const manifest = JSON.parse(readFileSync(join(archivePath, 'sitesaver-manifest.json'), 'utf8'));
   if (manifest.format !== 'sitesaver-offline-archive' || !manifest.sourceUrl) failures.push('Archive manifest is incomplete');

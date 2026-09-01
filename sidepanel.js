@@ -31,7 +31,10 @@ async function hydrateDurableProjection(resources) {
       hydrated.push(resource);
       continue;
     }
-    if (!resource.storageKey) throw new Error(`Тело ${resource.contentHash || resource.url} не имеет storageKey`);
+    if (!resource.storageKey) {
+      hydrated.push(resource);
+      continue;
+    }
     let blob = bodiesByStorageKey.get(resource.storageKey);
     if (!blob) {
       blob = await captureStorage.readBody(resource.storageKey, resource.mimeType || '');
@@ -225,9 +228,9 @@ function shortHash(value) {
   return (hash >>> 0).toString(36);
 }
 
-function apiSnapshotPath(snapshot) {
+function apiSnapshotPath(snapshot, index = 0) {
   const extension = extensionForMimeType(snapshot.mimeType) || '.bin';
-  const key = `${snapshot.method}\n${snapshot.url}\n${snapshot.postData}`;
+  const key = `${snapshot.method}\n${snapshot.url}\n${snapshot.postData}\n${snapshot.sequence || index}`;
   return `api-snapshots/${shortHash(key)}${extension}`;
 }
 
@@ -414,7 +417,7 @@ function rewriteHtmlResource(html, baseUrl, resolver, diagnosticSink = []) {
 }
 
 function injectOfflineBootstrap(html) {
-  const bootstrap = '<meta http-equiv="Content-Security-Policy" content="default-src \'self\' data: blob:; script-src \'self\' \'unsafe-inline\' \'unsafe-eval\' blob:; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data: blob:; media-src \'self\' data: blob:; font-src \'self\' data:; connect-src \'self\'; frame-src \'self\'; worker-src \'self\' blob:; object-src \'none\'; form-action \'none\'; base-uri \'self\'"><script src="/sitesaver-offline.js"></script>';
+  const bootstrap = '<meta http-equiv="Content-Security-Policy" content="default-src \'self\' data: blob:; script-src \'self\' \'unsafe-inline\' \'unsafe-eval\' blob:; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data: blob:; media-src \'self\' data: blob:; font-src \'self\' data:; connect-src \'self\'; frame-src \'self\'; worker-src \'self\' blob:; object-src \'none\'; form-action \'none\'; base-uri \'self\'"><script src="/replay-matcher.js"></script><script src="/sitesaver-offline.js"></script>';
   if (/<head(?:\s[^>]*)?>/i.test(html)) {
     return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${bootstrap}`);
   }
@@ -470,18 +473,23 @@ function createSpaFallback() {
 </html>`;
 }
 
-function createOfflineServiceWorker(resources, snapshots) {
-  const precache = ['/', '/index.html', '/404.html', '/sitesaver-offline.js', '/sitesaver-sw.js', ...resources.map((resource) => `/${resource.localPath}`), ...snapshots.map((snapshot) => snapshot.localPath)];
+function createOfflineServiceWorker(resources, snapshots, captureMisses = []) {
+  const precache = ['/', '/index.html', '/404.html', '/replay-matcher.js', '/replay-misses.json', '/sitesaver-offline.js', '/sitesaver-sw.js', ...resources.map((resource) => `/${resource.localPath}`), ...snapshots.filter((snapshot) => snapshot.localPath).map((snapshot) => snapshot.localPath)];
   const pageRoutes = {};
+  const pageUrls = {};
   resources.forEach((resource) => {
     if (!(resource.mimeType || '').toLowerCase().startsWith('text/html')) return;
     try {
       const url = new URL(resource.url);
+      url.hash = '';
+      pageUrls[url.href] = `/${resource.localPath}`;
       const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
       const key = pathname + url.search;
       if (key !== '/') pageRoutes[key] = `/${resource.localPath}`;
       for (const alias of resource.aliases || []) {
         const aliasUrl = new URL(alias);
+        aliasUrl.hash = '';
+        pageUrls[aliasUrl.href] = `/${resource.localPath}`;
         const aliasPathname = aliasUrl.pathname.length > 1 ? aliasUrl.pathname.replace(/\/+$/, '') : aliasUrl.pathname;
         const aliasKey = aliasPathname + aliasUrl.search;
         if (aliasKey !== '/') pageRoutes[aliasKey] = `/${resource.localPath}`;
@@ -492,19 +500,55 @@ function createOfflineServiceWorker(resources, snapshots) {
   });
   const cacheName = `sitesaver-offline-${Date.now().toString(36)}-${shortHash(precache.join('\n'))}`;
   const apiSnapshots = snapshots.map((snapshot) => ({
+    exchangeId: snapshot.exchangeId,
+    sequence: snapshot.sequence,
     method: snapshot.method,
     url: snapshot.url,
-    postData: snapshot.postData,
+    contentType: snapshot.contentType,
+    requestBodyHash: snapshot.requestBodyHash,
     status: snapshot.status,
     statusText: snapshot.statusText,
+    headers: snapshot.headers,
     mimeType: snapshot.mimeType,
-    localPath: snapshot.localPath
+    localPath: snapshot.localPath || null,
+    evidenceRefs: snapshot.evidenceRefs
   }));
+  const resourceRoutes = {};
+  const resourceUrls = {};
+  const resourceRouteOrigins = new Map();
+  for (const resource of resources) {
+    try {
+      const url = new URL(resource.url);
+      url.hash = '';
+      resourceUrls[url.href] = `/${resource.localPath}`;
+      const key = url.pathname + url.search;
+      if (!resourceRouteOrigins.has(key)) resourceRouteOrigins.set(key, new Set());
+      resourceRouteOrigins.get(key).add(url.origin);
+      resourceRoutes[key] = `/${resource.localPath}`;
+    } catch (error) {
+      // Invalid resource URLs are already reported during catalog creation.
+    }
+  }
+  for (const [key, origins] of resourceRouteOrigins) {
+    if (origins.size > 1) delete resourceRoutes[key];
+  }
 
-  return `const CACHE = ${JSON.stringify(cacheName)};
+  return `importScripts('/replay-matcher.js');
+const CACHE = ${JSON.stringify(cacheName)};
 const PRECACHE = ${JSON.stringify([...new Set(precache)])};
 const SNAPSHOTS = ${JSON.stringify(apiSnapshots)};
 const PAGE_ROUTES = ${JSON.stringify(pageRoutes)};
+const PAGE_URLS = ${JSON.stringify(pageUrls)};
+const RESOURCE_ROUTES = ${JSON.stringify(resourceRoutes)};
+const RESOURCE_URLS = ${JSON.stringify(resourceUrls)};
+const CAPTURE_MISSES = ${JSON.stringify(captureMisses)};
+const RUNTIME_MISSES = [];
+const MATCHERS = new Map();
+const matcherFor = (clientId) => {
+  const key = clientId || 'unidentified-client';
+  if (!MATCHERS.has(key)) MATCHERS.set(key, OpenSaveReplayMatcher.createMatcher(SNAPSHOTS, { runtimeOrigin: self.location.origin }));
+  return MATCHERS.get(key);
+};
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -522,26 +566,46 @@ self.addEventListener('activate', (event) => event.waitUntil((async () => {
   await self.clients.claim();
 })()));
 
-const bodyFor = async (request) => {
-  if (request.method === 'GET' || request.method === 'HEAD') return '';
-  try { return await request.clone().text(); } catch (error) { return ''; }
-};
-
-const findSnapshot = (requestUrl, method, body) => {
-  const url = new URL(requestUrl);
-  url.hash = '';
-  return SNAPSHOTS.find((snapshot) => {
-    if (snapshot.method !== method || snapshot.postData !== body) return false;
-    if (snapshot.url === url.href) return true;
-    const saved = new URL(snapshot.url);
-    return url.origin === self.location.origin && saved.pathname + saved.search === url.pathname + url.search;
-  });
-};
-
 const routeKey = (url) => {
   const pathname = url.pathname.length > 1 ? url.pathname.replace(/\\/+$/, '') : url.pathname;
   return pathname + url.search;
 };
+
+const recordMiss = (miss, identity, source = 'service-worker') => {
+  const entry = { timestamp: Date.now(), source, reasonCode: miss.reasonCode, evidence: { ...(miss.evidence || {}), identity } };
+  RUNTIME_MISSES.push(entry);
+  if (RUNTIME_MISSES.length > 500) RUNTIME_MISSES.shift();
+  return entry;
+};
+
+const missResponse = (miss, identity) => {
+  recordMiss(miss, identity);
+  return new Response(JSON.stringify({ error: 'Offline replay miss', reasonCode: miss.reasonCode }), {
+    status: 503,
+    statusText: 'Offline replay miss',
+    headers: { 'content-type': 'application/json', 'x-opensave-replay-miss': miss.reasonCode }
+  });
+};
+
+const snapshotResponse = async (snapshot, cache, requestMethod) => {
+  const headers = new Headers(snapshot.headers || {});
+  for (const name of ['connection', 'content-encoding', 'content-length', 'set-cookie', 'transfer-encoding']) headers.delete(name);
+  if (snapshot.mimeType) headers.set('content-type', snapshot.mimeType);
+  if (snapshot.localPath) {
+    const response = await cache.match(snapshot.localPath);
+    if (!response) return missResponse({ reasonCode: 'saved-response-unavailable', evidence: { exchangeId: snapshot.exchangeId, localPath: snapshot.localPath } }, null);
+    return new Response(requestMethod === 'HEAD' ? null : await response.arrayBuffer(), { status: snapshot.status, statusText: snapshot.statusText, headers });
+  }
+  if ([204, 205, 301, 302, 303, 307, 308].includes(snapshot.status)) return new Response(null, { status: snapshot.status, statusText: snapshot.statusText, headers });
+  return missResponse({ reasonCode: 'response-body-unavailable', evidence: { exchangeId: snapshot.exchangeId } }, null);
+};
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'opensave-replay-miss') recordMiss(event.data.miss, event.data.identity, 'bootstrap');
+  if (event.data && event.data.type === 'opensave-replay-ledger' && event.ports[0]) {
+    event.ports[0].postMessage({ schemaVersion: 1, captureMisses: CAPTURE_MISSES, runtimeMisses: RUNTIME_MISSES });
+  }
+});
 
 self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
@@ -549,39 +613,43 @@ self.addEventListener('fetch', (event) => {
     const url = new URL(request.url);
     const cache = await caches.open(CACHE);
 
-    if (request.mode === 'navigate') {
+    if (url.origin === self.location.origin && url.pathname === '/replay-misses.json') {
+      return new Response(JSON.stringify({ schemaVersion: 1, captureMisses: CAPTURE_MISSES, runtimeMisses: RUNTIME_MISSES }, null, 2), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    }
+
+    if (request.mode === 'navigate' && ['GET', 'HEAD'].includes(request.method)) {
       const exact = await cache.match(request, { ignoreSearch: false });
       if (exact) return exact;
-      const pagePath = PAGE_ROUTES[routeKey(url)];
+      const pagePath = PAGE_URLS[url.href] || (url.origin === self.location.origin ? PAGE_ROUTES[routeKey(url)] : null);
       if (pagePath) {
         const page = await cache.match(pagePath);
         if (page) return page;
       }
+      if (url.origin !== self.location.origin) return missResponse({ reasonCode: 'external-navigation-blocked', evidence: { url: url.href } }, null);
       return (await cache.match('/index.html')) || new Response('Offline archive is incomplete', { status: 503 });
     }
 
     if (request.method === 'GET') {
-      const pagePath = PAGE_ROUTES[routeKey(url)];
+      const pagePath = PAGE_URLS[url.href] || (url.origin === self.location.origin ? PAGE_ROUTES[routeKey(url)] : null);
       if (pagePath) {
         const page = await cache.match(pagePath);
         if (page) return page;
       }
+      const resourcePath = RESOURCE_URLS[url.href] || (url.origin === self.location.origin ? RESOURCE_ROUTES[url.pathname + url.search] : null);
+      if (resourcePath) {
+        const resource = await cache.match(resourcePath);
+        if (resource) return resource;
+      }
     }
 
-    const snapshot = findSnapshot(request.url, request.method, await bodyFor(request));
-    if (snapshot) {
-      const response = await cache.match(snapshot.localPath);
-      if (!response) return new Response(null, { status: 503, statusText: 'Saved API response is unavailable' });
-      const headers = new Headers(response.headers);
-      if (snapshot.mimeType) headers.set('content-type', snapshot.mimeType);
-      return new Response(await response.arrayBuffer(), { status: snapshot.status, statusText: snapshot.statusText, headers });
-    }
+    const matched = await matcherFor(event.clientId || event.resultingClientId).match(request);
+    if (matched.snapshot) return snapshotResponse(matched.snapshot, cache, request.method);
+    if (matched.miss && matched.miss.reasonCode !== 'not-found') return missResponse(matched.miss, matched.identity);
 
-    const cached = await cache.match(request, { ignoreSearch: false });
+    const cached = await cache.match(request.method === 'HEAD' ? new Request(request.url, { method: 'GET' }) : request, { ignoreSearch: false });
     if (cached) return cached;
-    if (url.origin !== self.location.origin || request.method !== 'GET') {
-      return new Response(null, { status: 503, statusText: 'External network blocked by openSave' });
-    }
+    if (matched.miss) return missResponse(matched.miss, matched.identity);
+    if (url.origin !== self.location.origin || !['GET', 'HEAD'].includes(request.method)) return missResponse({ reasonCode: 'external-network-blocked', evidence: { method: request.method, url: request.url } }, null);
     return new Response(null, { status: 404, statusText: 'Resource was not saved' });
   })());
 });`;
@@ -608,6 +676,8 @@ Files
 - index.html: captured entry document
 - assets/: captured CSS, JS, media, fonts, and images, grouped by source host
 - api-snapshots/: captured Fetch/XHR response bodies
+- replay-matcher.js: exact request identity and ordered response matching
+- replay-misses.json: capture-time and live replay miss ledger with reason codes
 - sitesaver-sw.js: offline service worker
 - sitesaver-offline.js: offline bootstrap
 - sitesaver-report.json: capture diagnostics and completeness score
@@ -748,13 +818,19 @@ fi
 
 function createOfflineReplayScript(snapshots, renderedPages = []) {
   const manifest = snapshots.map((snapshot) => ({
+    exchangeId: snapshot.exchangeId,
+    sequence: snapshot.sequence,
     method: snapshot.method,
     url: snapshot.url,
-    postData: snapshot.postData,
+    contentType: snapshot.contentType,
+    requestBodyHash: snapshot.requestBodyHash,
     status: snapshot.status,
     statusText: snapshot.statusText,
+    headers: snapshot.headers,
+    location: snapshot.location,
     mimeType: snapshot.mimeType,
-    localPath: snapshot.localPath
+    localPath: snapshot.localPath || null,
+    evidenceRefs: snapshot.evidenceRefs
   }));
 
   const historyRoutes = renderedPages.filter((page) => page.transitionKind === 'history').map((page) => {
@@ -764,6 +840,9 @@ function createOfflineReplayScript(snapshots, renderedPages = []) {
 
   return `(() => {
   const snapshots = ${JSON.stringify(manifest)};
+  const matcher = OpenSaveReplayMatcher.createMatcher(snapshots, { runtimeOrigin: location.origin });
+  const bootstrapControls = !navigator.serviceWorker.controller;
+  const runtimeMisses = [];
   const historyRoutes = ${JSON.stringify(historyRoutes)};
   const currentRoute = location.pathname + location.search + location.hash;
   const historyPage = historyRoutes.find((route) => route.route === currentRoute);
@@ -801,63 +880,105 @@ function createOfflineReplayScript(snapshots, renderedPages = []) {
   const route = new URLSearchParams(location.search).get('__sitesaver_route');
   if (route) history.replaceState(null, '', route);
 
-  const normalizeUrl = (value) => {
-    const url = new URL(value, location.href);
-    url.hash = '';
-    return url.href;
-  };
-
-  const normalizeBody = (body) => {
+  const bodyText = (body) => {
     if (body == null) return '';
     if (typeof body === 'string') return body;
     if (body instanceof URLSearchParams) return body.toString();
-    return '';
+    return null;
   };
 
-  const blockedResponse = () => new Response(null, { status: 503, statusText: 'Offline snapshot is unavailable' });
+  const reportMiss = (miss, identity) => {
+    const entry = { timestamp: Date.now(), source: 'bootstrap', reasonCode: miss.reasonCode, evidence: { ...(miss.evidence || {}), identity } };
+    runtimeMisses.push(entry);
+    if (navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage({ type: 'opensave-replay-miss', miss, identity });
+    return entry;
+  };
 
-  const matchSnapshot = (method, url, body) => {
-    const requestUrl = new URL(url, location.href);
-    requestUrl.hash = '';
-    return snapshots.find((snapshot) => {
-      if (snapshot.method !== method || snapshot.postData !== body) return false;
-      if (snapshot.url === requestUrl.href) return true;
-      const savedUrl = new URL(snapshot.url);
-      return requestUrl.origin === location.origin && savedUrl.pathname + savedUrl.search === requestUrl.pathname + requestUrl.search;
-    });
+  navigator.serviceWorker?.ready.then(() => {
+    if (!navigator.serviceWorker.controller) return;
+    for (const entry of runtimeMisses) navigator.serviceWorker.controller.postMessage({ type: 'opensave-replay-miss', miss: { reasonCode: entry.reasonCode, evidence: entry.evidence }, identity: entry.evidence.identity });
+  }).catch(() => {});
+
+  window.__openSaveReplayLedger = () => new Promise((resolve) => {
+    if (!navigator.serviceWorker.controller) {
+      resolve({ schemaVersion: 1, captureMisses: [], runtimeMisses: [...runtimeMisses] });
+      return;
+    }
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => resolve({ schemaVersion: 1, captureMisses: [], runtimeMisses: [...runtimeMisses] }), 1000);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timeout);
+      resolve(event.data);
+    };
+    navigator.serviceWorker.controller.postMessage({ type: 'opensave-replay-ledger' }, [channel.port2]);
+  });
+
+  const blockedResponse = (miss, identity) => {
+    reportMiss(miss, identity);
+    return new Response(JSON.stringify({ error: 'Offline replay miss', reasonCode: miss.reasonCode }), { status: 503, statusText: 'Offline replay miss', headers: { 'content-type': 'application/json', 'x-opensave-replay-miss': miss.reasonCode } });
+  };
+
+  const responseFor = async (snapshot, method) => {
+    const headers = new Headers(snapshot.headers || {});
+    for (const name of ['connection', 'content-encoding', 'content-length', 'set-cookie', 'transfer-encoding']) headers.delete(name);
+    if (snapshot.mimeType) headers.set('content-type', snapshot.mimeType);
+    if (!snapshot.localPath) {
+      if ([204, 205, 301, 302, 303, 307, 308].includes(snapshot.status)) return new Response(null, { status: snapshot.status, statusText: snapshot.statusText, headers });
+      return blockedResponse({ reasonCode: 'response-body-unavailable', evidence: { exchangeId: snapshot.exchangeId } }, null);
+    }
+    const local = await nativeFetch(snapshot.localPath);
+    if (!local.ok) return blockedResponse({ reasonCode: 'saved-response-unavailable', evidence: { exchangeId: snapshot.exchangeId, localPath: snapshot.localPath } }, null);
+    return new Response(method === 'HEAD' ? null : await local.arrayBuffer(), { status: snapshot.status, statusText: snapshot.statusText, headers });
   };
 
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
-    const request = input instanceof Request ? input : new Request(input, init);
-    let body = normalizeBody(init.body);
-    if (!body && request.method !== 'GET' && request.method !== 'HEAD') {
-      try { body = await request.clone().text(); } catch (error) { return blockedResponse(); }
-    }
-    const snapshot = matchSnapshot(request.method, request.url, body);
-    if (!snapshot) return blockedResponse();
-
-    const local = await nativeFetch(snapshot.localPath);
-    if (!local.ok) return new Response(null, { status: 503, statusText: 'Saved API response is unavailable' });
-    const headers = new Headers(local.headers);
-    if (snapshot.mimeType) headers.set('content-type', snapshot.mimeType);
-    return new Response(await local.arrayBuffer(), {
-      status: snapshot.status,
-      statusText: snapshot.statusText,
-      headers
-    });
-  };
+      if (typeof ReadableStream !== 'undefined' && init.body instanceof ReadableStream) return blockedResponse({ reasonCode: 'streaming-request', evidence: { url: String(input) } }, null);
+      let request;
+      try { request = input instanceof Request ? input : new Request(input, init); }
+      catch (error) { return blockedResponse({ reasonCode: 'streaming-request', evidence: { error: error.message } }, null); }
+      const unsupported = OpenSaveReplayMatcher.unsupportedReason(request);
+      if (unsupported) return blockedResponse({ reasonCode: unsupported, evidence: { method: request.method, url: request.url } }, null);
+      if (!bootstrapControls) return nativeFetch(request);
+      const matched = await matcher.match(request, init.body);
+      if (!matched.snapshot) {
+        const url = new URL(request.url);
+        if (url.origin === location.origin && ['GET', 'HEAD'].includes(request.method)) return nativeFetch(request);
+        return blockedResponse(matched.miss, matched.identity);
+      }
+      const snapshot = matched.snapshot;
+      if ([301, 302, 303, 307, 308].includes(snapshot.status) && snapshot.location && request.redirect !== 'manual') {
+        const preserveMethod = snapshot.status === 307 || snapshot.status === 308;
+        const redirectUrl = new URL(snapshot.location, request.url).href;
+        return preserveMethod ? window.fetch(new Request(redirectUrl, request)) : window.fetch(redirectUrl, { method: 'GET' });
+      }
+      return responseFor(snapshot, request.method);
+    };
 
   const nativeOpen = XMLHttpRequest.prototype.open;
   const nativeSend = XMLHttpRequest.prototype.send;
+  const nativeSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    this.__siteSaverRequest = { method: String(method).toUpperCase(), url, rest };
+    this.__siteSaverRequest = { method: String(method).toUpperCase(), url: new URL(url, location.href).href, headers: {} };
     return nativeOpen.call(this, method, url, ...rest);
   };
+  XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+    if (this.__siteSaverRequest) this.__siteSaverRequest.headers[String(name).toLowerCase()] = String(value);
+    return nativeSetRequestHeader.call(this, name, value);
+  };
   XMLHttpRequest.prototype.send = function(body) {
+    if (!bootstrapControls) return nativeSend.call(this, body);
     const request = this.__siteSaverRequest;
-    const snapshot = request && matchSnapshot(request.method, request.url, normalizeBody(body));
-    if (!snapshot) {
+    const text = bodyText(body);
+    const matched = request && text != null && matcher.matchIdentity({ ...request, body: text, contentType: request.headers['content-type'] || '' });
+    if (!matched || !matched.snapshot) {
+      reportMiss(matched && matched.miss || { reasonCode: text == null ? 'streaming-request' : 'not-found', evidence: {} }, matched && matched.identity || request);
+      this.abort();
+      return;
+    }
+    const snapshot = matched.snapshot;
+    if (!snapshot.localPath) {
+      reportMiss({ reasonCode: 'response-body-unavailable', evidence: { exchangeId: snapshot.exchangeId } }, matched.identity);
       this.abort();
       return;
     }
@@ -865,9 +986,9 @@ function createOfflineReplayScript(snapshots, renderedPages = []) {
     return nativeSend.call(this);
   };
 
-  navigator.sendBeacon = () => false;
-  window.WebSocket = function() { throw new Error('WebSocket is unavailable in the offline archive'); };
-  window.EventSource = function() { throw new Error('EventSource is unavailable in the offline archive'); };
+  navigator.sendBeacon = (url) => { reportMiss({ reasonCode: 'beacon', evidence: { url: new URL(url, location.href).href } }, null); return false; };
+  window.WebSocket = function(url) { reportMiss({ reasonCode: 'websocket', evidence: { url: new URL(url, location.href).href } }, null); throw new Error('WebSocket is unavailable in the offline archive'); };
+  window.EventSource = function(url) { reportMiss({ reasonCode: 'sse', evidence: { url: new URL(url, location.href).href } }, null); throw new Error('EventSource is unavailable in the offline archive'); };
 })();`;
 }
 
@@ -1486,11 +1607,13 @@ async function capture(action = 'fullCapture') {
     await saveGraphMission(graph, 'exporting');
     const bodyProjection = CaptureGraph.projectV1Bodies(graph);
     const snapshotProjection = CaptureGraph.projectV1ApiSnapshots(graph);
+    const replayProjection = CaptureGraph.projectReplayExchanges(graph);
     const renderedProjection = CaptureGraph.projectRenderedPages(graph);
-    const hydratedProjection = await hydrateDurableProjection([...bodyProjection, ...snapshotProjection, ...renderedProjection]);
+    const hydratedProjection = await hydrateDurableProjection([...bodyProjection, ...snapshotProjection, ...replayProjection, ...renderedProjection]);
     const bodies = hydratedProjection.slice(0, bodyProjection.length);
     const apiSnapshots = hydratedProjection.slice(bodyProjection.length, bodyProjection.length + snapshotProjection.length);
-    const renderedPages = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length);
+    const replayExchanges = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length, bodyProjection.length + snapshotProjection.length + replayProjection.length);
+    const renderedPages = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length + replayProjection.length);
 
     log(`HTML: ${(html.length / 1024).toFixed(1)} KB (${htmlMethod})`);
     log(`Перехвачено ответов: ${bodies.length}`);
@@ -1522,19 +1645,45 @@ async function capture(action = 'fullCapture') {
     captureReport.savedPageCount = savedPageCount;
     log(`Сохранено HTML-страниц: ${savedPageCount}`);
 
+    const replayMisses = CaptureGraph.projectReplayMisses(graph);
     const replaySnapshots = [];
-    for (const snapshot of apiSnapshots) {
+    for (const [index, snapshot] of replayExchanges.entries()) {
       try {
+        const parsedUrl = new URL(snapshot.url);
+        if (!/^https?:$/.test(parsedUrl.protocol)) continue;
         replaySnapshots.push({
           ...snapshot,
-          localPath: `/${apiSnapshotPath(snapshot)}`
+          url: OpenSaveReplayMatcher.normalizeUrl(parsedUrl.href),
+          localPath: snapshot.bodyAvailable ? `/${apiSnapshotPath(snapshot, index)}` : null
         });
       } catch (error) {
         // Skip invalid URL snapshot entries without failing the whole archive build.
       }
     }
     log(`Снимков Fetch/XHR: ${replaySnapshots.length}`);
-    captureReport.captureGraphParity.finalArchiveInputsMatch = await finalProjectionParity(graph, catalog, replaySnapshots);
+    captureReport.captureGraphParity.finalArchiveInputsMatch = await finalProjectionParity(graph, catalog, apiSnapshots);
+    const replayIdentityGroups = new Map();
+    for (const snapshot of replaySnapshots) {
+      const identity = `${OpenSaveReplayMatcher.pathKey(snapshot.url)}\n${snapshot.method}\n${OpenSaveReplayMatcher.normalizeContentType(snapshot.contentType)}\n${snapshot.requestBodyHash}`;
+      if (!replayIdentityGroups.has(identity)) replayIdentityGroups.set(identity, []);
+      replayIdentityGroups.get(identity).push(snapshot);
+    }
+    const replayAmbiguities = [...replayIdentityGroups.entries()].flatMap(([identity, matches]) => {
+      const origins = [...new Set(matches.map((snapshot) => new URL(snapshot.url).origin))];
+      return origins.length > 1 ? [{ reasonCode: 'ambiguous', evidenceRefs: matches.flatMap((snapshot) => snapshot.evidenceRefs || []), evidence: { identity, candidateCount: matches.length, origins } }] : [];
+    });
+    replayMisses.push(...replayAmbiguities);
+    const supportedReplayCount = replaySnapshots.filter((snapshot) => !replayMisses.some((miss) => miss.evidence && miss.evidence.exchangeId === snapshot.exchangeId)).length;
+    captureReport.replay = {
+      schemaVersion: 1,
+      recordedRequests: replayExchanges.length,
+      supportedRequests: supportedReplayCount,
+      locallyFulfillableRequests: replaySnapshots.filter((snapshot) => snapshot.bodyAvailable || [204, 205, 301, 302, 303, 307, 308].includes(snapshot.status)).length,
+      supportedCoverage: replayExchanges.length ? Number(((supportedReplayCount / replayExchanges.length) * 100).toFixed(1)) : 100,
+      ambiguityCount: replayAmbiguities.length,
+      captureMissCount: replayMisses.length,
+      missReasonCounts: replayMisses.reduce((counts, miss) => ({ ...counts, [miss.reasonCode]: (counts[miss.reasonCode] || 0) + 1 }), {})
+    };
 
     status('Переписываю пути...', 55);
     const resolver = createResourceResolver(catalog.byUrl, graph);
@@ -1575,24 +1724,27 @@ async function capture(action = 'fullCapture') {
     const zip = new JSZip();
     zip.file('index.html', fixedHtml);
     zip.file('404.html', createSpaFallback());
+    zip.file('replay-matcher.js', await fetch(chrome.runtime.getURL('replay-matcher.js')).then((response) => response.text()));
+    zip.file('replay-misses.json', JSON.stringify({ schemaVersion: 1, captureMisses: replayMisses, runtimeMisses: [] }, null, 2));
     zip.file('sitesaver-offline.js', createOfflineReplayScript(replaySnapshots, catalog.resources.filter((resource) => resource.routePage)));
-    zip.file('sitesaver-sw.js', createOfflineServiceWorker(catalog.resources, replaySnapshots));
+    zip.file('sitesaver-sw.js', createOfflineServiceWorker(catalog.resources, replaySnapshots, replayMisses));
     zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
     zip.file('sitesaver-manifest.json', JSON.stringify({
       format: 'sitesaver-offline-archive',
-      version: 1,
+      version: 2,
       sourceUrl: pageUrl,
       captureMode: capturedMode,
       capturedAt: new Date().toISOString(),
       resourceCount: catalog.resources.length,
       pageCount: savedPageCount,
-      apiSnapshotCount: replaySnapshots.length
+      apiSnapshotCount: replaySnapshots.length,
+      replayMissCount: replayMisses.length
     }, null, 2));
     zip.file('README.txt', createArchiveReadme());
     zip.file('open-windows.bat', createWindowsBatchLauncher());
     zip.file('open-windows.ps1', createWindowsPowerShellLauncher());
     zip.file('open-unix.sh', createUnixLauncher(), { unixPermissions: '755' });
-    replaySnapshots.forEach((snapshot) => {
+    replaySnapshots.filter((snapshot) => snapshot.localPath).forEach((snapshot) => {
       zip.file(snapshot.localPath.slice(1), snapshot.body, snapshot.base64Encoded ? { base64: true } : undefined);
     });
     for (const resource of catalog.resources) {
@@ -1688,5 +1840,7 @@ btnRecord.addEventListener('click', async () => {
     log(error.message, 'err');
   }
 });
+
+if (document.documentElement) document.documentElement.dataset.opensaveReady = 'true';
 
 btnFinishScenario.addEventListener('click', () => capture('finishScenario'));

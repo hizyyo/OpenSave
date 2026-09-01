@@ -22,6 +22,10 @@ jobs:
         run: |
           node --check background.js
           node --check sidepanel.js
+          node --check capture-graph.js
+          node --check replay-matcher.js
+          node --check tests/capture-graph.mjs
+          node --check tests/replay-matcher.mjs
           node --check tests/golden-capture.mjs
           node --check tests/browser-integration.mjs
           node --check tests/start-overlay-regression.mjs
@@ -33,6 +37,10 @@ jobs:
         run: node tests/deep-runtime-regression.mjs
       - name: Archive safety regression check
         run: node tests/archive-safety-regression.mjs
+      - name: Capture graph replay projection check
+        run: node tests/capture-graph.mjs
+      - name: Hermetic replay matcher check
+        run: node tests/replay-matcher.mjs
       - name: Golden archive check
         run: node tests/golden-capture.mjs tests/fixtures/offline-archive
       - name: Browser integration check

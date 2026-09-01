@@ -522,6 +522,85 @@
     return [...snapshots.values()].map((snapshot) => ({ ...snapshot, evidenceRefs: [...snapshot.evidenceRefs] }));
   }
 
+  function projectReplayExchanges(graph) {
+    assertGraph(graph);
+    return [...graph.apiExchanges]
+      .map((exchange, index) => {
+        const request = graph.requests.find((candidate) => candidate.id === exchange.requestId);
+        const response = graph.responses.find((candidate) => candidate.id === exchange.responseId);
+        const body = response && response.bodyId && graph.bodies.find((candidate) => candidate.id === response.bodyId);
+        if (!request || !response) return null;
+        const contentType = Object.entries(request.headers || {}).find(([name]) => name.toLowerCase() === 'content-type');
+        const responseHeaders = { ...(response.headers || {}) };
+        const location = Object.entries(responseHeaders).find(([name]) => name.toLowerCase() === 'location');
+        return {
+          exchangeId: exchange.id,
+          sequence: request.sequence || index + 1,
+          method: request.method,
+          url: response.normalizedUrl || request.normalizedUrl,
+          contentType: contentType ? contentType[1] : '',
+          requestBodyHash: request.requestBodyHash || 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          postData: request.requestBody == null ? '' : String(request.requestBody),
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+          location: location ? location[1] : '',
+          mimeType: response.mimeType || body && body.mimeType || '',
+          body: body ? body.body : null,
+          base64Encoded: Boolean(body && body.base64Encoded),
+          storageKey: body && body.storageKey || null,
+          contentHash: body && body.contentHash || null,
+          bodyAvailable: Boolean(body),
+          evidenceRefs: [request.id, response.id, body && body.id, exchange.id].filter(Boolean),
+          provenance: response.provenance
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.sequence - right.sequence || left.exchangeId.localeCompare(right.exchangeId));
+  }
+
+  function projectReplayMisses(graph) {
+    assertGraph(graph);
+    const misses = [];
+    for (const exchange of graph.apiExchanges) {
+      const request = graph.requests.find((candidate) => candidate.id === exchange.requestId);
+      const response = graph.responses.find((candidate) => candidate.id === exchange.responseId);
+      if (!request || !response) continue;
+      const headers = Object.fromEntries(Object.entries(request.headers || {}).map(([name, value]) => [name.toLowerCase(), String(value)]));
+      const replayUrl = response.normalizedUrl || request.normalizedUrl;
+      let reasonCode = '';
+      try {
+        const parsed = new URL(replayUrl);
+        if (!/^https?:$/.test(parsed.protocol)) reasonCode = 'unsupported-url-scheme';
+      } catch (error) {
+        reasonCode = 'invalid-request-url';
+      }
+      if (!reasonCode) {
+        if (exchange.resourceType === 'WebSocket' || headers.upgrade === 'websocket') reasonCode = 'websocket';
+        else if (headers.accept && headers.accept.toLowerCase().includes('text/event-stream')) reasonCode = 'sse';
+        else if (headers.range) reasonCode = 'range-request';
+        else if (!['GET', 'HEAD', 'POST'].includes(request.method)) reasonCode = 'unknown-mutation';
+        else if (request.method === 'POST' && headers['content-type'] && !/^(?:application\/json|application\/x-www-form-urlencoded|multipart\/form-data)(?:;|$)/i.test(headers['content-type'])) reasonCode = 'unsupported-post-content-type';
+        else if (response.bodyState !== 'stored' && ![204, 205, 301, 302, 303, 307, 308].includes(response.status)) reasonCode = 'response-body-unavailable';
+      }
+      if (!reasonCode) continue;
+      misses.push({
+        reasonCode,
+        evidenceRefs: [request.id, response.id, exchange.id],
+        evidence: {
+          exchangeId: exchange.id,
+          requestId: request.id,
+          responseId: response.id,
+          method: request.method,
+          url: replayUrl,
+          status: response.status,
+          resourceType: exchange.resourceType
+        }
+      });
+    }
+    return misses;
+  }
+
   function countByProvenance(records) {
     const counts = Object.fromEntries(Object.values(PROVENANCE).map((value) => [value, 0]));
     for (const record of records) counts[record.provenance] = (counts[record.provenance] || 0) + 1;
@@ -817,6 +896,8 @@
     addDiagnostic,
     projectV1Bodies,
     projectV1ApiSnapshots,
+    projectReplayExchanges,
+    projectReplayMisses,
     projectRenderedPages,
     projectReport,
     validateGraph,

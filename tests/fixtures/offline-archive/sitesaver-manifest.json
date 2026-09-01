@@ -1,8 +1,9 @@
 {
   "format": "sitesaver-offline-archive",
-  "version": 1,
+  "version": 2,
   "sourceUrl": "https://fixture.example/",
   "captureMode": "deep",
   "resourceCount": 1,
-  "apiSnapshotCount": 0
+  "apiSnapshotCount": 0,
+  "replayMissCount": 0
 }

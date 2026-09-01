@@ -18,6 +18,8 @@ const {
   addDiagnostic,
   projectV1Bodies,
   projectV1ApiSnapshots,
+  projectReplayExchanges,
+  projectReplayMisses,
   projectRenderedPages,
   projectReport,
   validateGraph
@@ -53,6 +55,7 @@ const post = addRequest(graph, {
   targetId: target.id,
   method: 'POST',
   originalUrl: 'https://example.test/api',
+  headers: { 'content-type': 'application/json' },
   requestBody: '{"variant":2}',
   timestamp: 102
 });
@@ -293,6 +296,32 @@ assert.deepEqual(legacySnapshots.map(({ method, url }) => ({ method, url })), [
   { method: 'GET', url: 'https://cdn.example.test/api-copy' },
   { method: 'POST', url: 'https://example.test/api' }
 ]);
+const replayExchanges = projectReplayExchanges(graph);
+assert.deepEqual(replayExchanges.map(({ method, url, status }) => ({ method, url, status })), [
+  { method: 'GET', url: 'https://example.test/api', status: 200 },
+  { method: 'POST', url: 'https://example.test/api', status: 201 },
+  { method: 'GET', url: 'https://cdn.example.test/api-copy', status: 200 }
+]);
+assert.match(replayExchanges[1].requestBodyHash, /^sha256:/);
+assert.equal(replayExchanges[1].contentType, 'application/json');
+assert.deepEqual(projectReplayMisses(graph), []);
+const invalidReplayGraph = structuredClone(graph);
+const invalidRequest = addRequest(invalidReplayGraph, {
+  missionId: mission.id,
+  targetId: target.id,
+  method: 'GET',
+  originalUrl: 'not a valid URL'
+});
+const invalidResponse = addResponse(invalidReplayGraph, {
+  missionId: mission.id,
+  targetId: target.id,
+  requestId: invalidRequest.id,
+  originalUrl: 'not a valid URL',
+  status: 200,
+  bodyState: 'not-captured'
+});
+addApiExchange(invalidReplayGraph, { missionId: mission.id, requestId: invalidRequest.id, responseId: invalidResponse.id, resourceType: 'Fetch' });
+assert.equal(projectReplayMisses(invalidReplayGraph).at(-1).reasonCode, 'invalid-request-url');
 const renderedPages = projectRenderedPages(graph);
 assert.equal(renderedPages.length, 1);
 assert.equal(renderedPages[0].routeId, route.id);
