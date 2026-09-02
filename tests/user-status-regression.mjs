@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import PrivacyGuardrails from '../privacy-guardrails.js';
 
 const html = readFileSync(new URL('../sidepanel.html', import.meta.url), 'utf8');
 const source = readFileSync(new URL('../sidepanel.js', import.meta.url), 'utf8');
@@ -34,12 +35,13 @@ const documentMock = {
 const context = vm.createContext({
   console, URL, URLSearchParams, Blob, TextEncoder, TextDecoder, crypto, Math,
   document: documentMock,
-  window: { addEventListener() {} },
+  window: { addEventListener() {}, confirm: () => false },
   chrome: { runtime: { onMessage: { addListener() {} } } },
   OpenSaveCaptureGraph: {},
   OpenSaveCaptureStorage: { createCaptureStorage: () => ({ initialize: async () => {} }) },
   OpenSaveResourceParser: {},
   OpenSaveArchiveValidator: {},
+  OpenSavePrivacyGuardrails: PrivacyGuardrails,
   JSZip: function JSZip() {}
 });
 

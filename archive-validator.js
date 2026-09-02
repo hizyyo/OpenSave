@@ -114,6 +114,9 @@
     for (const item of input.replayMisses || []) {
       diagnostics.push(diagnostic({ category: 'capture-miss', code: `replay-${item.reasonCode || 'unsupported'}`, severity: 'warning', url: item.evidence && item.evidence.url, message: `Captured request cannot be replayed: ${item.reasonCode || 'unsupported'}.`, evidenceRefs: item.evidenceRefs || [], evidence: item.evidence || null }));
     }
+    for (const item of report.privacy && report.privacy.exclusions || []) {
+      diagnostics.push(diagnostic({ category: 'privacy-risk', code: 'private-artifact-excluded', severity: 'warning', path: item.location || null, message: 'An artifact was excluded because it may contain private data.', evidence: { kind: item.kind || 'artifact', reason: item.reason || 'private-data-risk' } }));
+    }
     for (const route of input.routes || []) {
       if (route.state !== 'failed') continue;
       diagnostics.push(diagnostic({ category: 'capture-miss', code: 'captured-route-failed', severity: 'warning', routeId: route.id || route.routeId, url: route.routeUrl || route.url, message: route.decisionReason || 'Route capture failed.', evidenceRefs: [route.id || route.routeId].filter(Boolean) }));

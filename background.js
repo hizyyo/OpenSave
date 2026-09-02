@@ -1,7 +1,8 @@
-importScripts('capture-graph.js', 'capture-storage.js', 'live-dom-state.js', 'rendered-page-crawler.js');
+importScripts('capture-graph.js', 'capture-storage.js', 'privacy-guardrails.js', 'live-dom-state.js', 'rendered-page-crawler.js');
 
 const CaptureGraph = OpenSaveCaptureGraph;
 const CaptureStorage = OpenSaveCaptureStorage;
+const PrivacyGuardrails = OpenSavePrivacyGuardrails;
 const LiveDomState = OpenSaveLiveDomState;
 const RenderedPageCrawler = OpenSaveRenderedPageCrawler;
 const captureStorage = CaptureStorage.createCaptureStorage();
@@ -367,7 +368,7 @@ async function persistMissionSnapshot(state, extra = {}) {
   await captureStorageReady;
   const mission = captureGraph.missions.find((item) => item.id === missionId);
   if (state && mission) mission.state = state;
-  const snapshot = structuredClone(captureGraph);
+  const snapshot = PrivacyGuardrails.sanitizeCaptureGraph(captureGraph).graph;
   if (missionSnapshotTimer) clearTimeout(missionSnapshotTimer);
   missionSnapshotTimer = null;
   queuedMissionSnapshot = null;
@@ -381,7 +382,7 @@ async function persistMissionSnapshot(state, extra = {}) {
       reason: activeOperation && activeOperation.cancelReason || null,
       requestedAt: activeOperation && activeOperation.cancelRequestedAt || null
     },
-    ...extra
+    ...PrivacyGuardrails.sanitizeMetadata(extra, 'mission.extra')
   }));
   return missionPersistence;
 }
@@ -399,7 +400,7 @@ function flushQueuedMissionSnapshot() {
   const queued = queuedMissionSnapshot;
   queuedMissionSnapshot = null;
   if (!queued) return;
-  const graph = structuredClone(queued.graph);
+  const graph = PrivacyGuardrails.sanitizeCaptureGraph(queued.graph).graph;
   const mission = graph.missions.find((item) => item.id === queued.missionId);
   const pendingWork = queued.missionId === activeMissionId ? pendingWorkSnapshot() : [];
   missionPersistence = missionPersistence.catch(() => {}).then(() => captureStorage.saveMission(queued.missionId, {
@@ -425,7 +426,7 @@ async function interruptActiveMission(reason) {
     await captureStorageReady;
     await captureStorage.saveMission(missionId, {
       state: 'interrupted',
-      graph,
+      graph: PrivacyGuardrails.sanitizeCaptureGraph(graph).graph,
       pendingWork: [],
       recovery: { recoverable: true, interruptedAt: Date.now(), reason }
     });
@@ -493,7 +494,7 @@ function scheduleReportUpdate() {
   reportUpdateScheduled = true;
   setTimeout(() => {
     reportUpdateScheduled = false;
-    chrome.runtime.sendMessage({ action: 'captureReport', report: captureReport }).catch(() => {});
+    chrome.runtime.sendMessage({ action: 'captureReport', report: PrivacyGuardrails.sanitizeMetadata(captureReport, 'captureReport') }).catch(() => {});
   }, 250);
 }
 
@@ -720,13 +721,14 @@ async function attach(tabId, source = null) {
       startedAt: Date.now()
     });
     activeMissionId = mission.id;
+    const sanitizedMissionSourceUrl = PrivacyGuardrails.sanitizeUrl(missionSourceUrl, 'mission.sourceUrl').url;
     await captureStorage.createMission({
       id: mission.id,
       state: 'capturing',
       sourceTabId: missionSourceTabId,
-      sourceUrl: missionSourceUrl,
+      sourceUrl: sanitizedMissionSourceUrl,
       captureMode: mission.captureMode,
-      graph: captureGraph
+      graph: PrivacyGuardrails.sanitizeCaptureGraph(captureGraph).graph
     });
     const rootTarget = CaptureGraph.addTarget(captureGraph, {
       missionId: activeMissionId,
@@ -1261,7 +1263,7 @@ async function fullCapture(tabId, sendResponse, scenario = [], operation, mode =
       interaction,
       liveDomState: document.summary,
       crawlBudget: crawlPlanner && crawlPlanner.budgetSnapshot(),
-      report: projectedReport,
+      report: PrivacyGuardrails.sanitizeMetadata(projectedReport, 'captureReport'),
       mode,
       domain,
       pageUrl,
@@ -1439,7 +1441,11 @@ async function installScenarioRecorder(tabId) {
             const element = event.target.closest('button, input, select, textarea, summary, [role="button"], [role="tab"], [aria-expanded], [data-testid]');
             if (!element) return;
             const inputType = (element.getAttribute('type') || '').toLowerCase();
-            const sensitive = inputType === 'password' || inputType === 'file' || element.autocomplete === 'cc-number' || element.autocomplete === 'current-password' || element.autocomplete === 'new-password';
+            const autocomplete = (element.getAttribute('autocomplete') || '').toLowerCase();
+            const fieldName = [element.getAttribute('name'), element.id, element.getAttribute('aria-label')].filter(Boolean).join(' ');
+            const sensitive = inputType === 'password' || inputType === 'file'
+              || /(?:^|\s)(?:cc-|current-password|new-password|one-time-code|webauthn)/.test(autocomplete)
+              || /(?:^|[_\-.\s])(?:access[_-]?token|api[_-]?key|auth|card(?:holder|number)?|client[_-]?secret|credential|csrf|cvc|cvv|password|passcode|pin|refresh[_-]?token|secret|session(?:id)?|token|xsrf)(?:$|[_\-.\s])/i.test(fieldName);
             if (sensitive || event.type === 'input' || element.matches('textarea, input:not([type="checkbox"]):not([type="radio"])')) return;
             const action = { type: event.type, selector: selectorFor(element) };
             if (event.type === 'change') {

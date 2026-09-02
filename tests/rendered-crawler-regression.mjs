@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import PrivacyGuardrails from '../privacy-guardrails.js';
 
 const background = readFileSync(new URL('../background.js', import.meta.url), 'utf8');
 const sidepanel = readFileSync(new URL('../sidepanel.js', import.meta.url), 'utf8');
@@ -30,7 +31,7 @@ const context = vm.createContext({
     getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
     createElement: element
   },
-  window: { addEventListener() {} },
+  window: { addEventListener() {}, confirm: () => false },
   chrome: {
     runtime: { onMessage: { addListener() {} }, sendMessage: async () => ({ ok: true }) },
     downloads: { onChanged: { addListener() {}, removeListener() {} } }
@@ -38,6 +39,8 @@ const context = vm.createContext({
   OpenSaveCaptureGraph: {},
   OpenSaveCaptureStorage: { createCaptureStorage: () => ({ initialize: async () => {} }) },
   OpenSaveResourceParser: {},
+  OpenSaveArchiveValidator: {},
+  OpenSavePrivacyGuardrails: PrivacyGuardrails,
   JSZip: function JSZip() {}
 });
 vm.runInContext(sidepanel, context);

@@ -17,6 +17,7 @@ const CaptureGraph = OpenSaveCaptureGraph;
 const CaptureStorage = OpenSaveCaptureStorage;
 const ResourceParser = OpenSaveResourceParser;
 const ArchiveValidator = OpenSaveArchiveValidator;
+const PrivacyGuardrails = OpenSavePrivacyGuardrails;
 const captureStorage = CaptureStorage.createCaptureStorage();
 const captureStorageReady = captureStorage.initialize();
 let exportingMissionId = null;
@@ -65,19 +66,26 @@ async function saveGraphMission(graph, state, extra = {}) {
   const mission = graph && graph.missions && graph.missions[0];
   if (!mission) return null;
   mission.state = state || mission.state;
+  const sanitizedGraph = PrivacyGuardrails.sanitizeCaptureGraph(graph).graph;
   return captureStorage.saveMission(mission.id, {
     state: mission.state,
-    graph,
+    graph: sanitizedGraph,
     pendingWork: [],
-    ...extra
+    ...PrivacyGuardrails.sanitizeMetadata(extra, 'mission.extra')
   });
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
 }
 
 function log(message, type) {
   detailsToggleEl.style.display = 'flex';
   const line = document.createElement('div');
   line.className = type || '';
-  line.textContent = message;
+  line.textContent = PrivacyGuardrails.sanitizeText(String(message || ''), 'ui.log').value;
   logEl.appendChild(line);
 }
 
@@ -91,7 +99,7 @@ function status(message, percent) {
     currentProgressPercent = Math.max(currentProgressPercent, percent);
     fillEl.style.width = `${currentProgressPercent}%`;
   }
-  statusEl.textContent = message;
+  statusEl.textContent = PrivacyGuardrails.sanitizeText(String(message || ''), 'ui.status').value;
 }
 
 function isAnalyticsOrTracker(url) {
@@ -125,7 +133,7 @@ function renderSummary(summary) {
   }
 
   if (summary.recommendedAction) {
-    html += `<div class="action-banner"><strong>Рекомендация:</strong> ${summary.recommendedAction}</div>`;
+    html += `<div class="action-banner"><strong>Рекомендация:</strong> ${escapeHtml(PrivacyGuardrails.sanitizeText(summary.recommendedAction, 'ui.recommendation').value)}</div>`;
   }
 
   summaryCardEl.innerHTML = html;
@@ -133,6 +141,7 @@ function renderSummary(summary) {
 
 function renderReport(report) {
   if (!report) return;
+  report = PrivacyGuardrails.sanitizeMetadata(report, 'ui.report');
   const missing = (report.unresolvedResources || []).length;
   const pages = (report.unavailablePages || []).length;
   const truncated = (report.truncatedDiscovery || []).length;
@@ -142,10 +151,11 @@ function renderReport(report) {
   const quotaFailure = (report.quotaFailures || [])[0];
   const refetched = report.captureGraph && report.captureGraph.provenance.refetched.responses || 0;
   const validation = report.validation;
+  const privacy = report.privacy;
   const validationLabel = validation && ({ ready: 'Готово', partial: 'Частично', failed: 'Ошибка', cancelled: 'Проверка отменена' }[validation.status] || validation.status);
   const validationClass = validation && validation.status !== 'ready' ? 'warn' : '';
 
-  reportEl.innerHTML = `<strong>Технические подробности</strong><br>${validation ? `<span class="${validationClass}">Проверка архива: <strong>${validationLabel}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${quotaFailure.reason}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
+  reportEl.innerHTML = `<strong>Технические подробности</strong><br>${privacy ? `<span class="warn">Архив приватный: ${privacy.redactionCount || 0} редактирований, ${(privacy.exclusions || []).length} исключений; проверка метаданных не делает архив безопасным для публикации.</span><br>` : ''}${validation ? `<span class="${validationClass}">Проверка архива: <strong>${escapeHtml(validationLabel)}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${escapeHtml(quotaFailure.reason)}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
   detailsToggleEl.style.display = 'flex';
 }
 
@@ -294,7 +304,7 @@ function shortHash(value) {
 
 function apiSnapshotPath(snapshot, index = 0) {
   const extension = extensionForMimeType(snapshot.mimeType) || '.bin';
-  const key = `${snapshot.method}\n${snapshot.url}\n${snapshot.postData}\n${snapshot.sequence || index}`;
+  const key = `${snapshot.exchangeId || 'exchange'}\n${snapshot.sequence || index}\n${index}`;
   return `api-snapshots/${shortHash(key)}${extension}`;
 }
 
@@ -724,6 +734,10 @@ function createArchiveReadme() {
 
 This folder is a static web archive. It does not require Node.js or a build step.
 
+Privacy
+- Treat this archive as private by default. Metadata scanning and redaction do not make captured runnable content safe to share.
+- Review sitesaver-manifest.json and sitesaver-report.json before sharing.
+
 Do not run npm install or npm run dev here. This archive is not a Node.js project and intentionally has no package.json.
 
 Windows
@@ -752,6 +766,75 @@ Files
 - open-windows.bat / open-windows.ps1: Windows local launcher
 - open-unix.sh: macOS/Linux local launcher
 `;
+}
+
+function createPrivacyError(message) {
+  const error = new Error(message);
+  error.code = 'private-data-risk';
+  return error;
+}
+
+function preparePrivateArtifacts(entryHtml, resources, snapshots) {
+  const entryScan = PrivacyGuardrails.inspectRunnableBody(entryHtml, 'text/html', 'archive.index.html');
+  if (entryScan.risky) {
+    throw createPrivacyError('В основной странице найдены возможные секреты. openSave не изменяет исполняемый HTML автоматически, поэтому экспорт отменён. Удалите секреты на странице или сохраните её после выхода из аккаунта.');
+  }
+
+  const findings = [];
+  const riskyResources = new Set();
+  const riskySnapshots = new Set();
+  const sanitizedSnapshots = snapshots.map((snapshot, index) => {
+    const location = `archive.apiSnapshots[${index}]`;
+    const urlResult = PrivacyGuardrails.sanitizeUrl(snapshot.url, `${location}.url`);
+    const headerResult = PrivacyGuardrails.sanitizeHeaders(snapshot.headers, `${location}.headers`);
+    findings.push(...urlResult.findings, ...headerResult.findings);
+    if (urlResult.findings.length) riskySnapshots.add(index);
+    const requestBodyResult = PrivacyGuardrails.sanitizeRequestBody(snapshot.postData, snapshot.contentType, `${location}.requestBody`);
+    findings.push(...requestBodyResult.findings);
+    if (requestBodyResult.findings.length) riskySnapshots.add(index);
+    const redirectResult = snapshot.location
+      ? PrivacyGuardrails.sanitizeUrl(snapshot.location, `${location}.location`)
+      : { url: snapshot.location, findings: [] };
+    findings.push(...redirectResult.findings);
+    if (redirectResult.findings.length) riskySnapshots.add(index);
+    const bodyScan = PrivacyGuardrails.inspectRunnableBody(snapshot.body, snapshot.mimeType, `${location}.body`);
+    findings.push(...bodyScan.findings);
+    if (bodyScan.risky) riskySnapshots.add(index);
+    return {
+      ...snapshot,
+      url: urlResult.url,
+      location: redirectResult.url,
+      headers: headerResult.headers,
+      requestBodyHash: requestBodyResult.findings.length ? undefined : snapshot.requestBodyHash,
+      postData: undefined
+    };
+  });
+  const sanitizedResources = resources.map((resource, index) => {
+    const location = `archive.resources[${index}]`;
+    const urlResult = PrivacyGuardrails.sanitizeUrl(resource.url, `${location}.url`);
+    findings.push(...urlResult.findings);
+    if (urlResult.findings.length) riskyResources.add(index);
+    const bodyScan = PrivacyGuardrails.inspectRunnableBody(resource.body, resource.mimeType, `${location}.body`);
+    findings.push(...bodyScan.findings);
+    if (bodyScan.risky) riskyResources.add(index);
+    return { ...resource, url: urlResult.url };
+  });
+
+  const riskyCount = riskyResources.size + riskySnapshots.size;
+  if (!riskyCount) return { resources: sanitizedResources, snapshots: sanitizedSnapshots, findings, exclusions: [] };
+  const exclude = window.confirm(`Найдены возможные секреты в ${riskyCount} сохранённых файлах или API-ответах.\n\nНажмите OK, чтобы исключить эти артефакты из архива (часть сайта может не работать). Нажмите Отмена, чтобы полностью отменить экспорт.`);
+  if (!exclude) throw createPrivacyError('Экспорт отменён из-за риска утечки приватных данных.');
+
+  const exclusions = [
+    ...[...riskyResources].map((index) => ({ kind: 'resource', location: `archive.resources[${index}]`, reason: 'private-data-risk' })),
+    ...[...riskySnapshots].map((index) => ({ kind: 'api-snapshot', location: `archive.apiSnapshots[${index}]`, reason: 'private-data-risk' }))
+  ];
+  return {
+    resources: sanitizedResources.filter((resource, index) => !riskyResources.has(index)),
+    snapshots: sanitizedSnapshots.filter((snapshot, index) => !riskySnapshots.has(index)),
+    findings,
+    exclusions
+  };
 }
 
 function createWindowsValidatorLauncher() {
@@ -1816,9 +1899,9 @@ async function exportSelectedElement(selected) {
     await captureStorage.createMission({
       id: mission.id,
       state: 'exporting',
-      sourceUrl: selected.pageUrl,
+      sourceUrl: PrivacyGuardrails.sanitizeUrl(selected.pageUrl, 'selection.sourceUrl').url,
       captureMode: 'selection',
-      graph
+      graph: PrivacyGuardrails.sanitizeCaptureGraph(graph).graph
     });
     exportingMissionId = mission.id;
     const target = CaptureGraph.addTarget(graph, {
@@ -1879,19 +1962,29 @@ async function exportSelectedElement(selected) {
     mission.state = 'completed';
     mission.completedAt = Date.now();
     await saveGraphMission(graph, 'completed');
-    const finalReport = CaptureGraph.projectReport(graph, finalizeReport(report, catalog));
+    let finalReport = CaptureGraph.projectReport(graph, finalizeReport(report, catalog));
+    const prepared = preparePrivateArtifacts(html, catalog.resources, []);
+    finalReport = PrivacyGuardrails.sanitizeMetadata(finalReport, 'selection.report');
+    finalReport.privacy = {
+      privateByDefault: true,
+      safeToShare: false,
+      redactionCount: prepared.findings.length,
+      findings: prepared.findings,
+      exclusions: prepared.exclusions
+    };
     renderReport(finalReport);
 
     status('Собираю точечный архив...', 75);
     const zip = new JSZip();
     zip.file('index.html', html);
-    zip.file('sitesaver-selection.json', JSON.stringify({
+    zip.file('sitesaver-selection.json', JSON.stringify(PrivacyGuardrails.sanitizeMetadata({
       pageUrl: selected.pageUrl,
       label: selected.label,
+      privacy: { privateByDefault: true, safeToShare: false },
       exportedAt: new Date().toISOString()
-    }, null, 2));
+    }, 'selection.metadata'), null, 2));
     zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
-    for (const resource of catalog.resources) {
+    for (const resource of prepared.resources) {
       zip.file(resource.localPath, resource.body, resource.base64Encoded ? { base64: true } : undefined);
     }
 
@@ -1903,12 +1996,16 @@ async function exportSelectedElement(selected) {
     status('Готово', 100);
   } catch (error) {
     if (exportingMissionId) {
-      await captureStorage.saveMission(exportingMissionId, {
-        state: 'export-failed',
-        pendingWork: [],
-        recovery: { recoverable: true, interruptedAt: Date.now(), reason: error.code || 'export-failed' }
-      }).catch(() => {});
-      await captureStorage.cleanupTemporaryBodies(exportingMissionId).catch(() => {});
+      if (error.code === 'private-data-risk') {
+        await captureStorage.cleanupMission(exportingMissionId).catch(() => {});
+      } else {
+        await captureStorage.saveMission(exportingMissionId, {
+          state: 'export-failed',
+          pendingWork: [],
+          recovery: { recoverable: true, interruptedAt: Date.now(), reason: error.code || 'export-failed' }
+        }).catch(() => {});
+        await captureStorage.cleanupTemporaryBodies(exportingMissionId).catch(() => {});
+      }
     }
     status(`Ошибка: ${error.message}`);
     log(error.message, 'err');
@@ -2069,29 +2166,55 @@ async function capture(action = 'fullCapture') {
     const finalReport = CaptureGraph.projectReport(graph, finalizeReport(captureReport, catalog));
     await saveGraphMission(graph, 'exporting');
 
+    const prepared = preparePrivateArtifacts(fixedHtml, catalog.resources, replaySnapshots);
+    const exportResources = prepared.resources;
+    const exportSnapshots = prepared.snapshots;
+    const reportFindings = [];
+    const sanitizedReport = PrivacyGuardrails.sanitizeMetadata(finalReport, 'archive.report', reportFindings);
+    Object.keys(finalReport).forEach((key) => delete finalReport[key]);
+    Object.assign(finalReport, sanitizedReport);
+    const redactionAudit = [...prepared.findings, ...reportFindings];
+    const exportReplayMisses = PrivacyGuardrails.sanitizeMetadata(replayMisses, 'archive.replayMisses', redactionAudit);
+    const sanitizedCaptureRoutes = PrivacyGuardrails.sanitizeMetadata(graph.routes, 'archive.captureRoutes', redactionAudit);
+    finalReport.privacy = {
+      privateByDefault: true,
+      safeToShare: false,
+      redactionCount: redactionAudit.length,
+      findings: redactionAudit,
+      exclusions: prepared.exclusions
+    };
+
     status('Собираю архив...', 75);
     const zip = new JSZip();
     const rootValidationMarker = `root:${graph.documents[0] && graph.documents[0].id || 'entry'}`;
     const archiveHtml = injectValidationMarker(fixedHtml, rootValidationMarker);
-    const routeResources = catalog.resources.filter((resource) => resource.routePage);
+    const routeResources = exportResources.filter((resource) => resource.routePage);
     for (const resource of routeResources) resource.body = injectValidationMarker(String(resource.body || ''), resource.routeId);
     zip.file('index.html', archiveHtml);
     zip.file('404.html', createSpaFallback());
     zip.file('replay-matcher.js', await fetch(chrome.runtime.getURL('replay-matcher.js')).then((response) => response.text()));
     zip.file('archive-validator.js', await fetch(chrome.runtime.getURL('archive-validator.js')).then((response) => response.text()));
     zip.file('archive-validator-companion.mjs', await fetch(chrome.runtime.getURL('archive-validator-companion.mjs')).then((response) => response.text()));
-    zip.file('replay-misses.json', JSON.stringify({ schemaVersion: 1, captureMisses: replayMisses, runtimeMisses: [] }, null, 2));
-    zip.file('sitesaver-offline.js', createOfflineReplayScript(replaySnapshots, routeResources));
-    zip.file('sitesaver-sw.js', createOfflineServiceWorker(catalog.resources, replaySnapshots, replayMisses));
+    zip.file('replay-misses.json', JSON.stringify({ schemaVersion: 1, captureMisses: exportReplayMisses, runtimeMisses: [] }, null, 2));
+    zip.file('sitesaver-offline.js', createOfflineReplayScript(exportSnapshots, routeResources));
+    zip.file('sitesaver-sw.js', createOfflineServiceWorker(exportResources, exportSnapshots, exportReplayMisses));
     const archiveManifest = {
       format: 'sitesaver-offline-archive',
       version: 3,
-      sourceUrl: pageUrl,
+      sourceUrl: PrivacyGuardrails.sanitizeUrl(pageUrl).url,
       captureMode: capturedMode,
       capturedAt: new Date().toISOString(),
-      resourceCount: catalog.resources.length,
+      privacy: {
+        privateByDefault: true,
+        safeToShare: false,
+        redactionCount: redactionAudit.length,
+        redactedCategories: [...new Set(redactionAudit.map((finding) => finding.category))],
+        actions: redactionAudit,
+        exclusions: prepared.exclusions
+      },
+      resourceCount: exportResources.length,
       pageCount: savedPageCount,
-      apiSnapshotCount: replaySnapshots.length,
+      apiSnapshotCount: exportSnapshots.length,
       replayMissCount: replayMisses.length,
       validationStatus: 'pending'
     };
@@ -2103,10 +2226,10 @@ async function capture(action = 'fullCapture') {
     zip.file('open-unix.sh', createUnixLauncher(), { unixPermissions: '755' });
     zip.file('validate-windows.bat', createWindowsValidatorLauncher());
     zip.file('validate-unix.sh', createUnixValidatorLauncher(), { unixPermissions: '755' });
-    replaySnapshots.filter((snapshot) => snapshot.localPath).forEach((snapshot) => {
+    exportSnapshots.filter((snapshot) => snapshot.localPath).forEach((snapshot) => {
       zip.file(snapshot.localPath.slice(1), snapshot.body, snapshot.base64Encoded ? { base64: true } : undefined);
     });
-    for (const resource of catalog.resources) {
+    for (const resource of exportResources) {
       zip.file(resource.localPath, resource.body, resource.base64Encoded ? { base64: true } : undefined);
     }
 
@@ -2130,21 +2253,21 @@ async function capture(action = 'fullCapture') {
     }));
     const requiredFiles = [
       ...['index.html', '404.html', 'replay-matcher.js', 'replay-misses.json', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'archive-validator.js', 'archive-validator-companion.mjs', 'validate-windows.bat', 'validate-unix.sh', 'validation-plan.json', 'validation-report.json'].map((path) => ({ path, critical: true })),
-      ...catalog.resources.map((resource) => ({ path: resource.localPath, critical: true, evidenceRefs: resource.evidenceRefs || [] })),
-      ...replaySnapshots.filter((snapshot) => snapshot.localPath).map((snapshot) => ({ path: snapshot.localPath, critical: true, evidenceRefs: snapshot.evidenceRefs || [] }))
+      ...exportResources.map((resource) => ({ path: resource.localPath, critical: true, evidenceRefs: resource.evidenceRefs || [] })),
+      ...exportSnapshots.filter((snapshot) => snapshot.localPath).map((snapshot) => ({ path: snapshot.localPath, critical: true, evidenceRefs: snapshot.evidenceRefs || [] }))
     ];
     const validationInput = {
       rootUrl: '/',
       rootMarker: rootValidationMarker,
       routes: validationRoutes,
-      captureRoutes: graph.routes,
+      captureRoutes: sanitizedCaptureRoutes,
       requiredFiles,
       report: finalReport,
-      replayMisses,
+      replayMisses: exportReplayMisses,
       budget: { maxRoutes: MAX_PAGES, maxDurationMs: capturedMode === 'deep' ? 60000 : 30000, maxRouteDurationMs: 7000, maxServiceWorkerDurationMs: 2000 }
     };
     const validationPlan = ArchiveValidator.createPlan(validationInput);
-    validationPlan.baselineDiagnostics = ArchiveValidator.inputDiagnostics({ report: finalReport, routes: graph.routes, replayMisses });
+    validationPlan.baselineDiagnostics = ArchiveValidator.inputDiagnostics({ report: finalReport, routes: sanitizedCaptureRoutes, replayMisses: exportReplayMisses });
     zip.file('validation-plan.json', JSON.stringify(validationPlan, null, 2));
     zip.file('validation-report.json', JSON.stringify(ArchiveValidator.finalize({ plan: validationPlan, diagnostics: [{ category: 'validator-infrastructure', code: 'validation-pending', severity: 'warning', message: 'Archive validation has not completed.' }], totalRoutes: validationPlan.routes.length + 1 }), null, 2));
     const validation = await validateArchive(zip, validationInput);
@@ -2195,7 +2318,7 @@ async function capture(action = 'fullCapture') {
     setStage('Готово');
     status('Генерирую архив...', 94);
     const archive = await zip.generateAsync({ type: 'blob', streamFiles: true });
-    log(`Архив: ${(archive.size / 1024 / 1024).toFixed(2)} MB, ${catalog.resources.length + 1} файлов`, 'ok');
+    log(`Архив: ${(archive.size / 1024 / 1024).toFixed(2)} MB, ${exportResources.length + 1} файлов`, 'ok');
 
     status('Скачиваю...', 97);
     await downloadArchiveBlob(archive, `${domain}.zip`);
@@ -2206,10 +2329,11 @@ async function capture(action = 'fullCapture') {
     status(validation.status === 'ready' ? 'Архив готов' : `Архив скачан: ${validation.status}`, 100);
     log('Архив скачан. Результат проверки сохранён в validation-report.json.', validation.status === 'ready' ? 'ok' : 'err');
   } catch (error) {
-    setStage('Ошибка');
+    const privacyCancelled = error.code === 'private-data-risk';
+    setStage(privacyCancelled ? 'Отменено' : 'Ошибка');
     if (summaryCardEl) {
       renderSummary({
-        status: 'failed',
+        status: privacyCancelled ? 'cancelled' : 'failed',
         savedPages: 0,
         totalDiscoveredPages: 1,
         savedFiles: 0,
@@ -2221,13 +2345,17 @@ async function capture(action = 'fullCapture') {
       });
     }
     if (missionId) {
-      await captureStorage.saveMission(missionId, {
-        state: 'export-failed',
-        graph,
-        pendingWork: [],
-        recovery: { recoverable: true, interruptedAt: Date.now(), reason: error.code || 'export-failed' }
-      }).catch(() => {});
-      await captureStorage.cleanupTemporaryBodies(missionId).catch(() => {});
+      if (privacyCancelled) {
+        await captureStorage.cleanupMission(missionId).catch(() => {});
+      } else {
+        await captureStorage.saveMission(missionId, {
+          state: 'export-failed',
+          graph: graph ? PrivacyGuardrails.sanitizeCaptureGraph(graph).graph : graph,
+          pendingWork: [],
+          recovery: { recoverable: true, interruptedAt: Date.now(), reason: error.code || 'export-failed' }
+        }).catch(() => {});
+        await captureStorage.cleanupTemporaryBodies(missionId).catch(() => {});
+      }
     }
     status(`Ошибка: ${error.message}`);
     log(error.message, 'err');
