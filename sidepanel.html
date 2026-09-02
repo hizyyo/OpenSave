@@ -18,13 +18,25 @@ h1{font-size:16px;margin-bottom:2px}
 .capture-mode strong{display:block;font-size:11px;color:#e4ded7;margin-bottom:2px}
 .capture-mode span{display:block;font-size:10px;color:#888;line-height:1.25}
 .progress{display:none;background:#212531;border-radius:6px;padding:12px;margin-bottom:8px}
+.progress-stage{font-size:11px;color:#22c55e;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
 .progress-bar{height:4px;background:#333;border-radius:2px;margin-top:8px;overflow:hidden}
 .progress-fill{height:100%;background:#22c55e;width:0%;transition:width .3s}
 .status{font-size:12px;color:#aaa;min-height:20px}
-.log{background:#15171e;border-radius:6px;padding:10px;max-height:300px;overflow-y:auto;font-size:11px;color:#888;line-height:1.5;font-family:monospace;display:none}
+.summary-card{display:none;background:#15171e;border:1px solid #252a35;border-radius:6px;padding:12px;margin-top:8px;font-size:12px;line-height:1.6}
+.summary-card.ready{border-color:#22c55e}
+.summary-card.partial{border-color:#f59e0b}
+.summary-card.failed{border-color:#ef4444}
+.summary-headline{font-size:13px;font-weight:700;margin-bottom:6px}
+.summary-headline.ready{color:#22c55e}
+.summary-headline.partial{color:#f59e0b}
+.summary-headline.failed{color:#ef4444}
+.action-banner{margin-top:8px;padding:8px;background:#1e2430;border-left:3px solid #3b82f6;border-radius:4px;font-size:11px;color:#dbeafe}
+.details-toggle{margin-top:10px;cursor:pointer;color:#888;font-size:11px;user-select:none;display:flex;align-items:center;gap:4px}
+.details-toggle:hover{color:#aaa}
+.log{background:#0e1016;border:1px solid #212531;border-radius:6px;padding:10px;max-height:250px;overflow-y:auto;font-size:11px;color:#888;line-height:1.5;font-family:monospace;margin-top:6px;display:none}
 .log .ok{color:#22c55e}
 .log .err{color:#ef4444}
-.report{display:none;background:#15171e;border-radius:6px;padding:10px;margin-top:8px;font-size:11px;color:#aaa;line-height:1.5}
+.report{display:none;margin-top:8px;font-size:11px;color:#aaa;line-height:1.5}
 .report strong{color:#e4ded7}
 .report .warn{color:#f59e0b}
 </style>
@@ -41,11 +53,16 @@ h1{font-size:16px;margin-bottom:2px}
 <button class="btn btn-capture" id="btnFinishScenario" hidden>Остановить и захватить</button>
 <button class="btn btn-cancel" id="btnCancelCapture" hidden>Отменить захват</button>
 <div class="progress" id="progress">
+  <div class="progress-stage" id="stage">Подготовка</div>
   <div class="status" id="status">Подготовка...</div>
   <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
 </div>
-<div class="log" id="log"></div>
+<div class="summary-card" id="summaryCard"></div>
+<div class="details-toggle" id="detailsToggle" style="display:none;">
+  <span id="toggleIcon">▶</span> Подробности и диагностика
+</div>
 <div class="report" id="report"></div>
+<div class="log" id="log"></div>
 <script src="lib/jszip.min.js"></script>
 <script src="capture-graph.js"></script>
 <script src="capture-storage.js"></script>

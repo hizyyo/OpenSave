@@ -1,7 +1,11 @@
 const btnCapture = document.getElementById('btnCapture');
 const progress = document.getElementById('progress');
+const stageEl = document.getElementById('stage');
 const statusEl = document.getElementById('status');
 const fillEl = document.getElementById('fill');
+const summaryCardEl = document.getElementById('summaryCard');
+const detailsToggleEl = document.getElementById('detailsToggle');
+const toggleIconEl = document.getElementById('toggleIcon');
 const logEl = document.getElementById('log');
 const btnRecord = document.getElementById('btnRecord');
 const btnFinishScenario = document.getElementById('btnFinishScenario');
@@ -17,6 +21,15 @@ const captureStorage = CaptureStorage.createCaptureStorage();
 const captureStorageReady = captureStorage.initialize();
 let exportingMissionId = null;
 let activeValidation = null;
+let currentProgressStage = '';
+let currentProgressPercent = 0;
+
+detailsToggleEl.addEventListener('click', () => {
+  const isHidden = logEl.style.display === 'none' || logEl.style.display === '';
+  logEl.style.display = isHidden ? 'block' : 'none';
+  reportEl.style.display = isHidden ? 'block' : 'none';
+  toggleIconEl.textContent = isHidden ? '▼' : '▶';
+});
 
 const MAX_FALLBACK_RESOURCES = 400;
 const MAX_PAGES = 40;
@@ -61,16 +74,61 @@ async function saveGraphMission(graph, state, extra = {}) {
 }
 
 function log(message, type) {
-  logEl.style.display = 'block';
+  detailsToggleEl.style.display = 'flex';
   const line = document.createElement('div');
   line.className = type || '';
   line.textContent = message;
   logEl.appendChild(line);
 }
 
+function setStage(stageName) {
+  currentProgressStage = stageName;
+  if (stageEl) stageEl.textContent = stageName;
+}
+
 function status(message, percent) {
-  if (percent !== undefined) fillEl.style.width = `${percent}%`;
+  if (percent !== undefined) {
+    currentProgressPercent = Math.max(currentProgressPercent, percent);
+    fillEl.style.width = `${currentProgressPercent}%`;
+  }
   statusEl.textContent = message;
+}
+
+function isAnalyticsOrTracker(url) {
+  return /google-analytics|googletagmanager|analytics|mc\.yandex|metrika|hotjar|segment|amplitude|mixpanel|facebook\.net|connect\.facebook|clarity\.ms|sentry/i.test(url || '');
+}
+
+function renderSummary(summary) {
+  if (!summaryCardEl) return;
+  summaryCardEl.className = `summary-card ${summary.status}`;
+  summaryCardEl.style.display = 'block';
+
+  let headlineText = 'Копия готова к просмотру';
+  if (summary.status === 'partial') headlineText = 'Копия сохранена частично';
+  if (summary.status === 'failed') headlineText = 'Не удалось сохранить сайт';
+  if (summary.status === 'cancelled') headlineText = 'Сохранение отменено';
+
+  let html = `<div class="summary-headline ${summary.status}">${headlineText}</div>`;
+  html += `<div>• Сохранено страниц: <strong>${summary.savedPages}</strong> из <strong>${summary.totalDiscoveredPages}</strong></div>`;
+  html += `<div>• Сохранено файлов контента: <strong>${summary.savedFiles}</strong> из <strong>${summary.totalRequiredFiles}</strong></div>`;
+  
+  if (summary.ignoredAnalyticsCount > 0) {
+    html += `<div>• Игнорировано аналитики и трекеров: <strong>${summary.ignoredAnalyticsCount}</strong> (не влияет на сайт)</div>`;
+  }
+  
+  if (summary.testedRoutes > 0) {
+    if (summary.failedRoutes === 0) {
+      html += `<div>• Все проверенные страницы (<strong>${summary.testedRoutes}</strong>) открываются успешно</div>`;
+    } else {
+      html += `<div style="color:#ef4444">• Не удалось открыть страниц при проверке: <strong>${summary.failedRoutes}</strong> из <strong>${summary.testedRoutes}</strong></div>`;
+    }
+  }
+
+  if (summary.recommendedAction) {
+    html += `<div class="action-banner"><strong>Рекомендация:</strong> ${summary.recommendedAction}</div>`;
+  }
+
+  summaryCardEl.innerHTML = html;
 }
 
 function renderReport(report) {
@@ -86,8 +144,9 @@ function renderReport(report) {
   const validation = report.validation;
   const validationLabel = validation && ({ ready: 'Готово', partial: 'Частично', failed: 'Ошибка', cancelled: 'Проверка отменена' }[validation.status] || validation.status);
   const validationClass = validation && validation.status !== 'ready' ? 'warn' : '';
-  reportEl.style.display = 'block';
-  reportEl.innerHTML = `<strong>Отчёт захвата</strong><br>${validation ? `<span class="${validationClass}">Проверка архива: <strong>${validationLabel}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${quotaFailure.reason}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
+
+  reportEl.innerHTML = `<strong>Технические подробности</strong><br>${validation ? `<span class="${validationClass}">Проверка архива: <strong>${validationLabel}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${quotaFailure.reason}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
+  detailsToggleEl.style.display = 'flex';
 }
 
 function addReportItem(report, type, item) {
@@ -1405,6 +1464,7 @@ function resetInterface() {
   btnCancelCapture.hidden = true;
   btnCancelCapture.disabled = false;
   captureModeEl.querySelectorAll('input').forEach((input) => { input.disabled = false; });
+  currentProgressPercent = 0;
   updateCaptureLabel();
 }
 
@@ -1877,6 +1937,7 @@ async function capture(action = 'fullCapture') {
     const tab = await getActiveTab();
     if (!tab) throw new Error('Нет активной вкладки');
 
+    setStage('Подготовка страницы');
     status(mode === 'deep' ? 'Глубокий захват: подключаюсь...' : 'Быстрый захват: подключаюсь...', 5);
     const result = await chrome.runtime.sendMessage({ action, tabId: tab.id, mode });
     if (!result || !result.ok) throw new Error((result && result.error) || 'нет ответа от расширения');
@@ -1900,6 +1961,7 @@ async function capture(action = 'fullCapture') {
     const replayExchanges = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length, bodyProjection.length + snapshotProjection.length + replayProjection.length);
     const renderedPages = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length + replayProjection.length);
 
+    setStage('Сбор страниц и ресурсов');
     log(`HTML: ${(html.length / 1024).toFixed(1)} KB (${htmlMethod})`);
     log(`Перехвачено ответов: ${bodies.length}`);
     log(capturedMode === 'deep' ? 'Режим: глубокий захват' : 'Режим: быстрый захват');
@@ -1917,6 +1979,8 @@ async function capture(action = 'fullCapture') {
     const catalog = createCatalog(renderedPages.map((page) => ({ ...page, routePage: true })), pageUrl);
     bodies.forEach((body) => catalog.add(body));
     const fallbackPageUrls = graph.routes.filter((route) => route.state === 'failed' && route.decisionReason === 'rendered-navigation-failed').map((route) => route.routeUrl);
+    
+    setStage('Сохранение медиа и данных');
     const fetched = await collectMissingFiles(html, pageUrl, catalog, captureReport, false, graph, fallbackPageUrls);
     log(`Дозагружено ссылок и ресурсов: ${fetched}`);
     const pageOrigin = new URL(pageUrl).origin;
@@ -1970,6 +2034,7 @@ async function capture(action = 'fullCapture') {
       missReasonCounts: replayMisses.reduce((counts, miss) => ({ ...counts, [miss.reasonCode]: (counts[miss.reasonCode] || 0) + 1 }), {})
     };
 
+    setStage('Сборка копии');
     status('Переписываю пути...', 55);
     const resolver = createResourceResolver(catalog.byUrl, graph);
     const entryDiagnostics = [];
@@ -2045,6 +2110,7 @@ async function capture(action = 'fullCapture') {
       zip.file(resource.localPath, resource.body, resource.base64Encoded ? { base64: true } : undefined);
     }
 
+    setStage('Проверка результата');
     status('Проверяю готовый архив...', 90);
     await saveGraphMission(graph, 'validating');
     const rootPath = `${new URL(pageUrl).pathname}${new URL(pageUrl).search}`;
@@ -2092,11 +2158,41 @@ async function capture(action = 'fullCapture') {
     mission.completedAt = Date.now();
     await saveGraphMission(graph, mission.state, { validation });
     renderReport(finalReport);
+
+    const totalDiscoveredPages = (graph.routes || []).length || 1;
+    const totalRequiredFiles = (finalReport.completeness && finalReport.completeness.discovered) || catalog.resources.length;
+    const savedFiles = (finalReport.completeness && finalReport.completeness.saved) || catalog.resources.length;
+    const ignoredAnalytics = (finalReport.unresolvedResources || []).filter((item) => isAnalyticsOrTracker(item.url)).length;
+
+    let recommendedAction = '';
+    if (validation.status === 'partial') {
+      if (validation.diagnostics.some((item) => item.code === 'local-companion-required')) {
+        recommendedAction = 'Откройте распакованную папку и запустите validate-windows.bat (или validate-unix.sh) для финальной проверки сервис-воркера.';
+      } else {
+        recommendedAction = 'Проверьте список замечаний в подробностях или повторите глубокий захват страницы.';
+      }
+    } else if (validation.status === 'failed') {
+      recommendedAction = 'Попробуйте обновить страницу и запустить захват заново.';
+    }
+
+    renderSummary({
+      status: validation.status,
+      savedPages: savedPageCount,
+      totalDiscoveredPages,
+      savedFiles,
+      totalRequiredFiles,
+      ignoredAnalyticsCount: ignoredAnalytics,
+      testedRoutes: validation.checkedRoutes,
+      failedRoutes: validation.routes.filter((r) => r.status === 'failed').length,
+      recommendedAction
+    });
+
     log(`Проверка архива: ${validation.status}, маршруты ${validation.checkedRoutes}/${validation.totalRoutes}, замечания ${validation.issueCount}`, validation.status === 'ready' ? 'ok' : 'err');
     for (const diagnostic of validation.diagnostics.filter((item) => item.severity !== 'info').slice(0, 10)) {
       log(`[${diagnostic.category}/${diagnostic.code}] ${diagnostic.message}`, 'err');
     }
 
+    setStage('Готово');
     status('Генерирую архив...', 94);
     const archive = await zip.generateAsync({ type: 'blob', streamFiles: true });
     log(`Архив: ${(archive.size / 1024 / 1024).toFixed(2)} MB, ${catalog.resources.length + 1} файлов`, 'ok');
@@ -2110,6 +2206,20 @@ async function capture(action = 'fullCapture') {
     status(validation.status === 'ready' ? 'Архив готов' : `Архив скачан: ${validation.status}`, 100);
     log('Архив скачан. Результат проверки сохранён в validation-report.json.', validation.status === 'ready' ? 'ok' : 'err');
   } catch (error) {
+    setStage('Ошибка');
+    if (summaryCardEl) {
+      renderSummary({
+        status: 'failed',
+        savedPages: 0,
+        totalDiscoveredPages: 1,
+        savedFiles: 0,
+        totalRequiredFiles: 1,
+        ignoredAnalyticsCount: 0,
+        testedRoutes: 0,
+        failedRoutes: 0,
+        recommendedAction: error.message || 'Проверьте соединение или повторите захват.'
+      });
+    }
     if (missionId) {
       await captureStorage.saveMission(missionId, {
         state: 'export-failed',
