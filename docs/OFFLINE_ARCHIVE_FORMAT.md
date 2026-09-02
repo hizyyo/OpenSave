@@ -12,6 +12,11 @@ An archive is portable, static, and inspectable. It should work from any static 
 | `404.html` | Static-host fallback for SPA paths. |
 | `replay-matcher.js` | Shared exact matcher for method, normalized URL, content type, and request body hash. |
 | `replay-misses.json` | Inspectable capture-time miss ledger; the service worker serves a live view with runtime misses. |
+| `validation-plan.json` | Bounded root/route checkpoints and required archive files. |
+| `validation-report.json` | Machine-readable `ready`, `partial`, `failed`, or `cancelled` result with typed diagnostics. |
+| `archive-validator.js` | Shared validation planning, static checks, and classification core. |
+| `archive-validator-companion.mjs` | Optional final localhost runner when extension APIs cannot validate the service-worker update fetch. |
+| `validate-windows.bat` / `validate-unix.sh` | Launchers for the optional final validator. |
 | `sitesaver-sw.js` | Offline service worker. |
 | `sitesaver-offline.js` | Runtime bootstrap and API replay fallback. |
 | `sitesaver-report.json` | Capture diagnostics and completeness score. |
@@ -38,13 +43,15 @@ Query strings are represented by a deterministic short hash in the filename. Thi
 ```json
 {
   "format": "sitesaver-offline-archive",
-  "version": 2,
+  "version": 3,
   "sourceUrl": "https://example.com/",
   "captureMode": "deep",
   "capturedAt": "2026-08-11T00:00:00.000Z",
   "resourceCount": 42,
   "apiSnapshotCount": 3,
-  "replayMissCount": 0
+  "replayMissCount": 0,
+  "validationStatus": "partial",
+  "validationDurationMs": 8421
 }
 ```
 
@@ -53,6 +60,14 @@ Query strings are represented by a deterministic short hash in the filename. Thi
 `sitesaver-report.json` includes a completeness score calculated from discovered dependencies that were successfully saved. It also records unresolved resources, unavailable pages, crawler limits, HTTP/network diagnostics, and cache/child-target observations.
 
 The `replay` section reports supported recorded-request coverage, locally fulfillable exchanges, ambiguity count, and capture-time miss reason counts. `replay-misses.json` contains evidence references for every known miss; when served through the generated service worker, the same path also includes runtime misses recorded since activation.
+
+The `validation` section mirrors `validation-report.json`. It separates capture misses, rewrite failures, replay-runtime failures, and validator-infrastructure limitations. Validation failure never removes or suppresses the archive download.
+
+## Post-Export Validation
+
+The extension validates the completed in-memory ZIP before download. It mounts files through CDP request interception, blocks external requests before network access, executes the root and every saved route within a hard route/time budget, checks route-specific injected markers, and collects runtime exceptions, console errors, failed local requests, and replay diagnostics.
+
+Chrome does not expose the service-worker update fetch to the extension debugger in this validation context. When that final check is unavailable, the automatic result is `partial` with `local-companion-required`; it is never labeled `ready`. Run `validate-windows.bat` or `validate-unix.sh` from the unpacked archive to use a temporary localhost server and isolated headless Chrome. The companion applies the same schema, verifies real service-worker control and zero egress, then updates `validation-report.json`, `sitesaver-report.json`, and `sitesaver-manifest.json` in place.
 
 ## Request Identity
 

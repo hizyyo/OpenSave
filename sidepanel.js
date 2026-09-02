@@ -12,9 +12,11 @@ const btnCancelCapture = document.getElementById('btnCancelCapture');
 const CaptureGraph = OpenSaveCaptureGraph;
 const CaptureStorage = OpenSaveCaptureStorage;
 const ResourceParser = OpenSaveResourceParser;
+const ArchiveValidator = OpenSaveArchiveValidator;
 const captureStorage = CaptureStorage.createCaptureStorage();
 const captureStorageReady = captureStorage.initialize();
 let exportingMissionId = null;
+let activeValidation = null;
 
 const MAX_FALLBACK_RESOURCES = 400;
 const MAX_PAGES = 40;
@@ -81,8 +83,11 @@ function renderReport(report) {
   const diagnostics = (report.networkFailures || []).length + (report.httpErrors || []).length + (report.unreadableResponses || []).length;
   const quotaFailure = (report.quotaFailures || [])[0];
   const refetched = report.captureGraph && report.captureGraph.provenance.refetched.responses || 0;
+  const validation = report.validation;
+  const validationLabel = validation && ({ ready: 'Готово', partial: 'Частично', failed: 'Ошибка', cancelled: 'Проверка отменена' }[validation.status] || validation.status);
+  const validationClass = validation && validation.status !== 'ready' ? 'warn' : '';
   reportEl.style.display = 'block';
-  reportEl.innerHTML = `<strong>Отчёт захвата</strong><br>${quotaFailure ? `<span class="warn">${quotaFailure.reason}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
+  reportEl.innerHTML = `<strong>Отчёт захвата</strong><br>${validation ? `<span class="${validationClass}">Проверка архива: <strong>${validationLabel}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${quotaFailure.reason}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
 }
 
 function addReportItem(report, type, item) {
@@ -678,12 +683,40 @@ Files
 - api-snapshots/: captured Fetch/XHR response bodies
 - replay-matcher.js: exact request identity and ordered response matching
 - replay-misses.json: capture-time and live replay miss ledger with reason codes
+- validation-report.json: automatic route, runtime, and zero-egress validation result
+- validation-plan.json: bounded route and required-file validation inputs
+- validate-windows.bat / validate-unix.sh: optional final localhost validator when browser restrictions limit in-extension service-worker checks
 - sitesaver-sw.js: offline service worker
 - sitesaver-offline.js: offline bootstrap
 - sitesaver-report.json: capture diagnostics and completeness score
 - sitesaver-manifest.json: archive metadata
 - open-windows.bat / open-windows.ps1: Windows local launcher
 - open-unix.sh: macOS/Linux local launcher
+`;
+}
+
+function createWindowsValidatorLauncher() {
+  return `@echo off
+setlocal
+cd /d "%~dp0"
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Node.js is required for the optional final validator.
+  exit /b 1
+)
+node archive-validator-companion.mjs .
+`;
+}
+
+function createUnixValidatorLauncher() {
+  return `#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")"
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js is required for the optional final validator."
+  exit 1
+fi
+node archive-validator-companion.mjs .
 `;
 }
 
@@ -1442,6 +1475,258 @@ async function downloadArchiveBlob(archive, filename) {
   }
 }
 
+function injectValidationMarker(html, marker) {
+  const script = `<script>document.documentElement.dataset.opensaveValidationMarker=${JSON.stringify(marker)};</script>`;
+  if (/<head(?:\s[^>]*)?>/i.test(html)) return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${script}`);
+  return `${script}${html}`;
+}
+
+function archiveMimeType(path) {
+  const extension = path.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] || '';
+  return {
+    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.ico': 'image/x-icon', '.wasm': 'application/wasm',
+    '.woff': 'font/woff', '.woff2': 'font/woff2', '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json'
+  }[extension] || 'application/octet-stream';
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const size = 32 * 1024;
+  for (let offset = 0; offset < bytes.length; offset += size) binary += String.fromCharCode(...bytes.subarray(offset, offset + size));
+  return btoa(binary);
+}
+
+async function archiveFiles(zip) {
+  const files = new Map();
+  for (const [path, entry] of Object.entries(zip.files)) {
+    if (entry.dir) continue;
+    const bytes = await entry.async('uint8array');
+    files.set(ArchiveValidator.normalizePath(path), {
+      path: ArchiveValidator.normalizePath(path),
+      bytes,
+      text: /(?:html?|css|js|json|svg|txt|md)$/i.test(path) ? new TextDecoder().decode(bytes) : null,
+      mimeType: archiveMimeType(path)
+    });
+  }
+  return files;
+}
+
+async function waitForValidationCondition(callback, timeoutMs, intervalMs = 100) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (activeValidation && activeValidation.cancelled) return false;
+    try {
+      if (await callback()) return true;
+    } catch (error) {
+      // Navigation can replace the execution context while it is being inspected.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+async function validateArchive(zip, input) {
+  const startedAt = Date.now();
+  const plan = ArchiveValidator.createPlan(input);
+  const files = await archiveFiles(zip);
+  const diagnostics = [
+    ...ArchiveValidator.inputDiagnostics({ report: input.report, routes: input.captureRoutes, replayMisses: input.replayMisses }),
+    ...ArchiveValidator.inspectArchive({ files, requiredFiles: plan.requiredFiles })
+  ];
+  const routeResults = [];
+  const requiredPaths = new Set(plan.requiredFiles.map((file) => file.path));
+  const routePaths = new Map(plan.routes.filter((route) => route.localPath).map((route) => {
+    const url = new URL(route.url, 'https://validation.invalid/');
+    return [`${url.pathname}${url.search}`, route.localPath];
+  }));
+  const validationId = crypto.randomUUID();
+  const validationOrigin = `http://validation-${validationId}.localhost`;
+  const debuggeeSessions = new Set();
+  let tabId = null;
+  let serviceWorkerControlled = false;
+  let checkedRoutes = 0;
+  const runnerEvidence = { networkRequests: 0, pausedRequests: 0, fulfilledRequests: 0, requestUrls: [] };
+
+  const addDiagnostic = (item) => {
+    const entry = ArchiveValidator.diagnostic(item);
+    const signature = JSON.stringify(entry);
+    if (!diagnostics.some((existing) => JSON.stringify(existing) === signature)) diagnostics.push(entry);
+  };
+
+  const pathForRequest = (requestUrl) => {
+    const url = new URL(requestUrl);
+    const routePath = routePaths.get(`${url.pathname}${url.search}`);
+    if (routePath) return routePath;
+    const path = ArchiveValidator.normalizePath(url.pathname);
+    return path || 'index.html';
+  };
+
+  const configureSession = async (debuggeeId, child = false) => {
+    const key = debuggeeId.sessionId || 'root';
+    if (debuggeeSessions.has(key)) return;
+    debuggeeSessions.add(key);
+    await chrome.debugger.sendCommand(debuggeeId, 'Runtime.enable').catch(() => {});
+    await chrome.debugger.sendCommand(debuggeeId, 'Log.enable').catch(() => {});
+    await chrome.debugger.sendCommand(debuggeeId, 'Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    if (child) await chrome.debugger.sendCommand(debuggeeId, 'Runtime.runIfWaitingForDebugger').catch(() => {});
+  };
+
+  const onEvent = (debuggeeId, method, params) => {
+    if (debuggeeId.tabId !== tabId) return;
+    if (method === 'Target.attachedToTarget') {
+      configureSession({ tabId, sessionId: params.sessionId }, true).catch((error) => addDiagnostic({ category: 'validator-infrastructure', code: 'child-session-setup-failed', severity: 'error', message: error.message, url: params.targetInfo && params.targetInfo.url }));
+      return;
+    }
+    if (method === 'Network.requestWillBeSent') {
+      runnerEvidence.networkRequests += 1;
+      if (runnerEvidence.requestUrls.length < 30) runnerEvidence.requestUrls.push(params.request.url);
+      return;
+    }
+    if (method === 'Runtime.exceptionThrown') {
+      addDiagnostic({ category: 'replay-runtime-failure', code: 'runtime-exception', severity: 'error', message: params.exceptionDetails.exception?.description || params.exceptionDetails.text || 'Runtime exception', url: params.exceptionDetails.url || null });
+      return;
+    }
+    if (method === 'Log.entryAdded' && params.entry.level === 'error') {
+      if (/Failed to load resource/i.test(params.entry.text)) return;
+      addDiagnostic({ category: 'replay-runtime-failure', code: 'console-error', severity: 'warning', message: params.entry.text, url: params.entry.url || null });
+      return;
+    }
+    if (method !== 'Fetch.requestPaused') return;
+    runnerEvidence.pausedRequests += 1;
+    (async () => {
+      const requestUrl = params.request.url;
+      let url;
+      try { url = new URL(requestUrl); } catch (error) {
+        await chrome.debugger.sendCommand(debuggeeId, 'Fetch.failRequest', { requestId: params.requestId, errorReason: 'BlockedByClient' }).catch(() => {});
+        addDiagnostic({ category: 'replay-runtime-failure', code: 'invalid-runtime-request-url', severity: 'warning', message: requestUrl });
+        return;
+      }
+      if (url.origin !== validationOrigin) {
+        addDiagnostic({ category: 'replay-runtime-failure', code: 'external-request-attempt', severity: 'warning', message: 'Archive attempted an external request; the validator blocked it.', url: requestUrl });
+        await chrome.debugger.sendCommand(debuggeeId, 'Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 503, responseHeaders: [{ name: 'content-type', value: 'text/plain' }], body: btoa('Blocked by openSave validator') }).catch(() => {});
+        return;
+      }
+      const path = pathForRequest(requestUrl);
+      const file = files.get(path);
+      if (!file) {
+        addDiagnostic({ category: 'rewrite-failure', code: requiredPaths.has(path) ? 'failed-required-request' : 'unsaved-local-request', severity: requiredPaths.has(path) ? 'error' : 'info', message: `Archive requested an unavailable local file: ${path}`, path, url: requestUrl });
+        await chrome.debugger.sendCommand(debuggeeId, 'Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 404, responseHeaders: [{ name: 'content-type', value: 'text/plain' }], body: btoa('Not found') }).catch(() => {});
+        return;
+      }
+      await chrome.debugger.sendCommand(debuggeeId, 'Fetch.fulfillRequest', {
+        requestId: params.requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: 'content-type', value: file.mimeType }, { name: 'cache-control', value: 'public, max-age=3600' }],
+        body: params.request.method === 'HEAD' ? '' : bytesToBase64(file.bytes)
+      }).then(() => { runnerEvidence.fulfilledRequests += 1; }, (error) => addDiagnostic({ category: 'validator-infrastructure', code: 'request-fulfillment-failed', severity: 'error', message: error.message, path, url: requestUrl }));
+    })();
+  };
+
+  const evaluate = async (expression) => {
+    try {
+      const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'Validation expression failed');
+      runnerEvidence.lastEvaluationType = result.result && result.result.type || null;
+      runnerEvidence.lastEvaluationValue = result.result && result.result.value;
+      return result.result && result.result.value;
+    } catch (error) {
+      runnerEvidence.lastEvaluationError = error.message;
+      throw error;
+    }
+  };
+
+  const checkRoute = async (route, isRoot = false) => {
+    const routeStartedAt = Date.now();
+    if (activeValidation.cancelled) return;
+    const sourceUrl = new URL(route.url, validationOrigin);
+    const validationUrl = `${validationOrigin}${sourceUrl.pathname}${sourceUrl.search}${sourceUrl.hash}`;
+    await chrome.debugger.sendCommand({ tabId }, 'Page.navigate', { url: validationUrl });
+    const loaded = await waitForValidationCondition(() => evaluate(`document.documentElement?.dataset.opensaveValidationMarker === ${JSON.stringify(route.expectedMarker)}`), plan.budget.maxRouteDurationMs);
+    if (!loaded) {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      addDiagnostic({ category: 'replay-runtime-failure', code: 'route-load-timeout', severity: 'error', message: 'Saved route did not finish loading within the validation budget.', routeId: route.routeId, url: route.url, evidence: { ...runnerEvidence, tabUrl: tab && tab.url || null } });
+      routeResults.push({ routeId: route.routeId, url: route.url, validationUrl, expectedMarker: route.expectedMarker, actualMarker: null, status: 'failed', durationMs: Date.now() - routeStartedAt });
+      return;
+    }
+    if (isRoot) {
+      serviceWorkerControlled = await waitForValidationCondition(() => evaluate(`Promise.race([navigator.serviceWorker?.ready.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 250))])`), plan.budget.maxServiceWorkerDurationMs);
+      if (serviceWorkerControlled) {
+        await chrome.debugger.sendCommand({ tabId }, 'Page.reload', { ignoreCache: true });
+        await waitForValidationCondition(() => evaluate('document.readyState === "complete" && Boolean(navigator.serviceWorker.controller)'), plan.budget.maxRouteDurationMs);
+      } else {
+        const registration = await evaluate(`(async () => ({
+          secureContext: isSecureContext,
+          registrations: 'serviceWorker' in navigator ? (await navigator.serviceWorker.getRegistrations()).map((item) => ({ scope: item.scope, installing: item.installing?.state || null, waiting: item.waiting?.state || null, active: item.active?.state || null })) : [],
+          error: 'serviceWorker' in navigator ? await Promise.race([
+            navigator.serviceWorker.register('/sitesaver-sw.js').then(() => '', (error) => error.message),
+            new Promise((resolve) => setTimeout(() => resolve('registration-timeout'), 1000))
+          ]) : 'Service worker API unavailable'
+        }))()`).catch((error) => ({ error: error.message }));
+        addDiagnostic({ category: 'validator-infrastructure', code: 'local-companion-required', severity: 'warning', message: 'Chrome did not expose the service-worker update fetch to the in-extension validator. Run the included local validator for a final ready/failed result.', evidence: { ...runnerEvidence, registration } });
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const actualMarker = await evaluate('document.documentElement.dataset.opensaveValidationMarker || null').catch(() => null);
+    const replayLedger = await evaluate('window.__openSaveReplayLedger ? window.__openSaveReplayLedger() : null').catch(() => null);
+    for (const miss of replayLedger && replayLedger.runtimeMisses || []) {
+      addDiagnostic({ category: 'replay-runtime-failure', code: `runtime-replay-${miss.reasonCode || 'miss'}`, severity: 'warning', message: `Replay runtime miss: ${miss.reasonCode || 'unknown'}.`, routeId: route.routeId, evidence: miss.evidence || null });
+    }
+    const routeStatus = actualMarker === route.expectedMarker ? 'ready' : 'failed';
+    if (routeStatus === 'failed') addDiagnostic({ category: 'replay-runtime-failure', code: 'route-content-mismatch', severity: 'error', message: 'Saved route rendered different page content than its captured checkpoint.', routeId: route.routeId, url: route.url, evidence: { expectedMarker: route.expectedMarker, actualMarker } });
+    routeResults.push({ routeId: route.routeId, url: route.url, validationUrl, expectedMarker: route.expectedMarker, actualMarker, status: routeStatus, durationMs: Date.now() - routeStartedAt });
+    checkedRoutes += 1;
+  };
+
+  activeValidation = { cancelled: false, tabId: null };
+  btnCancelCapture.hidden = false;
+  btnCancelCapture.disabled = false;
+  try {
+    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    tabId = tab.id;
+    activeValidation.tabId = tabId;
+    chrome.debugger.onEvent.addListener(onEvent);
+    await chrome.debugger.attach({ tabId }, '1.3');
+    await Promise.all([
+      chrome.debugger.sendCommand({ tabId }, 'Page.enable'),
+      chrome.debugger.sendCommand({ tabId }, 'Network.enable'),
+      configureSession({ tabId }),
+      chrome.debugger.sendCommand({ tabId }, 'Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe', exclude: false }, { type: 'worker', exclude: false }, { type: 'shared_worker', exclude: false }, { type: 'service_worker', exclude: false }] })
+    ]);
+    await checkRoute({ routeId: 'root', url: plan.root.url, expectedMarker: plan.root.expectedMarker }, true);
+    for (const route of plan.routes) {
+      if (activeValidation.cancelled || Date.now() - startedAt >= plan.budget.maxDurationMs) break;
+      status(`Проверяю архив: ${checkedRoutes + 1}/${plan.routes.length + 1}`, 90);
+      await checkRoute(route);
+    }
+    if (!activeValidation.cancelled && checkedRoutes < plan.routes.length + 1) addDiagnostic({ category: 'validator-infrastructure', code: 'validation-time-budget', severity: 'warning', message: 'Validation stopped at its total time budget.', evidence: { checkedRoutes, totalRoutes: plan.routes.length + 1 } });
+  } catch (error) {
+    addDiagnostic({ category: 'validator-infrastructure', code: 'validator-runner-failed', severity: 'error', message: error.message });
+  } finally {
+    chrome.debugger.onEvent.removeListener(onEvent);
+    if (tabId) await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
+  }
+
+  const cancelled = Boolean(activeValidation && activeValidation.cancelled);
+  activeValidation = null;
+  return ArchiveValidator.finalize({
+    plan,
+    diagnostics,
+    cancelled,
+    startedAt,
+    completedAt: Date.now(),
+    durationMs: Date.now() - startedAt,
+    zeroEgressVerified: true,
+    serviceWorkerControlled,
+    checkedRoutes,
+    totalRoutes: plan.routes.length + 1,
+    requiredFilesChecked: plan.requiredFiles.length,
+    routeResults
+  });
+}
+
 async function exportSelectedElement(selected) {
   btnCapture.disabled = true;
   btnRecord.disabled = true;
@@ -1718,32 +2003,41 @@ async function capture(action = 'fullCapture') {
     if (finalGraphErrors.length) throw new Error(`Некорректный итоговый граф захвата: ${finalGraphErrors[0]}`);
     const finalReport = CaptureGraph.projectReport(graph, finalizeReport(captureReport, catalog));
     await saveGraphMission(graph, 'exporting');
-    renderReport(finalReport);
 
     status('Собираю архив...', 75);
     const zip = new JSZip();
-    zip.file('index.html', fixedHtml);
+    const rootValidationMarker = `root:${graph.documents[0] && graph.documents[0].id || 'entry'}`;
+    const archiveHtml = injectValidationMarker(fixedHtml, rootValidationMarker);
+    const routeResources = catalog.resources.filter((resource) => resource.routePage);
+    for (const resource of routeResources) resource.body = injectValidationMarker(String(resource.body || ''), resource.routeId);
+    zip.file('index.html', archiveHtml);
     zip.file('404.html', createSpaFallback());
     zip.file('replay-matcher.js', await fetch(chrome.runtime.getURL('replay-matcher.js')).then((response) => response.text()));
+    zip.file('archive-validator.js', await fetch(chrome.runtime.getURL('archive-validator.js')).then((response) => response.text()));
+    zip.file('archive-validator-companion.mjs', await fetch(chrome.runtime.getURL('archive-validator-companion.mjs')).then((response) => response.text()));
     zip.file('replay-misses.json', JSON.stringify({ schemaVersion: 1, captureMisses: replayMisses, runtimeMisses: [] }, null, 2));
-    zip.file('sitesaver-offline.js', createOfflineReplayScript(replaySnapshots, catalog.resources.filter((resource) => resource.routePage)));
+    zip.file('sitesaver-offline.js', createOfflineReplayScript(replaySnapshots, routeResources));
     zip.file('sitesaver-sw.js', createOfflineServiceWorker(catalog.resources, replaySnapshots, replayMisses));
-    zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
-    zip.file('sitesaver-manifest.json', JSON.stringify({
+    const archiveManifest = {
       format: 'sitesaver-offline-archive',
-      version: 2,
+      version: 3,
       sourceUrl: pageUrl,
       captureMode: capturedMode,
       capturedAt: new Date().toISOString(),
       resourceCount: catalog.resources.length,
       pageCount: savedPageCount,
       apiSnapshotCount: replaySnapshots.length,
-      replayMissCount: replayMisses.length
-    }, null, 2));
+      replayMissCount: replayMisses.length,
+      validationStatus: 'pending'
+    };
+    zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
+    zip.file('sitesaver-manifest.json', JSON.stringify(archiveManifest, null, 2));
     zip.file('README.txt', createArchiveReadme());
     zip.file('open-windows.bat', createWindowsBatchLauncher());
     zip.file('open-windows.ps1', createWindowsPowerShellLauncher());
     zip.file('open-unix.sh', createUnixLauncher(), { unixPermissions: '755' });
+    zip.file('validate-windows.bat', createWindowsValidatorLauncher());
+    zip.file('validate-unix.sh', createUnixValidatorLauncher(), { unixPermissions: '755' });
     replaySnapshots.filter((snapshot) => snapshot.localPath).forEach((snapshot) => {
       zip.file(snapshot.localPath.slice(1), snapshot.body, snapshot.base64Encoded ? { base64: true } : undefined);
     });
@@ -1751,18 +2045,70 @@ async function capture(action = 'fullCapture') {
       zip.file(resource.localPath, resource.body, resource.base64Encoded ? { base64: true } : undefined);
     }
 
-    status('Генерирую архив...', 88);
+    status('Проверяю готовый архив...', 90);
+    await saveGraphMission(graph, 'validating');
+    const rootPath = `${new URL(pageUrl).pathname}${new URL(pageUrl).search}`;
+    const validationRoutes = routeResources.filter((resource) => {
+      try {
+        const url = new URL(resource.routeUrl || resource.url);
+        return `${url.pathname}${url.search}` !== rootPath;
+      } catch (error) {
+        return true;
+      }
+    }).map((resource) => ({
+      routeId: resource.routeId,
+      url: resource.routeUrl || resource.url,
+      localPath: resource.localPath,
+      expectedMarker: resource.routeId,
+      evidenceRefs: [resource.routeId, ...(resource.evidenceRefs || [])].filter(Boolean)
+    }));
+    const requiredFiles = [
+      ...['index.html', '404.html', 'replay-matcher.js', 'replay-misses.json', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'archive-validator.js', 'archive-validator-companion.mjs', 'validate-windows.bat', 'validate-unix.sh', 'validation-plan.json', 'validation-report.json'].map((path) => ({ path, critical: true })),
+      ...catalog.resources.map((resource) => ({ path: resource.localPath, critical: true, evidenceRefs: resource.evidenceRefs || [] })),
+      ...replaySnapshots.filter((snapshot) => snapshot.localPath).map((snapshot) => ({ path: snapshot.localPath, critical: true, evidenceRefs: snapshot.evidenceRefs || [] }))
+    ];
+    const validationInput = {
+      rootUrl: '/',
+      rootMarker: rootValidationMarker,
+      routes: validationRoutes,
+      captureRoutes: graph.routes,
+      requiredFiles,
+      report: finalReport,
+      replayMisses,
+      budget: { maxRoutes: MAX_PAGES, maxDurationMs: capturedMode === 'deep' ? 60000 : 30000, maxRouteDurationMs: 7000, maxServiceWorkerDurationMs: 2000 }
+    };
+    const validationPlan = ArchiveValidator.createPlan(validationInput);
+    validationPlan.baselineDiagnostics = ArchiveValidator.inputDiagnostics({ report: finalReport, routes: graph.routes, replayMisses });
+    zip.file('validation-plan.json', JSON.stringify(validationPlan, null, 2));
+    zip.file('validation-report.json', JSON.stringify(ArchiveValidator.finalize({ plan: validationPlan, diagnostics: [{ category: 'validator-infrastructure', code: 'validation-pending', severity: 'warning', message: 'Archive validation has not completed.' }], totalRoutes: validationPlan.routes.length + 1 }), null, 2));
+    const validation = await validateArchive(zip, validationInput);
+    finalReport.validation = validation;
+    archiveManifest.validationStatus = validation.status;
+    archiveManifest.validationDurationMs = validation.durationMs;
+    zip.file('validation-report.json', JSON.stringify(validation, null, 2));
+    zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
+    zip.file('sitesaver-manifest.json', JSON.stringify(archiveManifest, null, 2));
+    mission.state = validation.status === 'ready' ? 'completed' : validation.status;
+    mission.completedAt = Date.now();
+    await saveGraphMission(graph, mission.state, { validation });
+    renderReport(finalReport);
+    log(`Проверка архива: ${validation.status}, маршруты ${validation.checkedRoutes}/${validation.totalRoutes}, замечания ${validation.issueCount}`, validation.status === 'ready' ? 'ok' : 'err');
+    for (const diagnostic of validation.diagnostics.filter((item) => item.severity !== 'info').slice(0, 10)) {
+      log(`[${diagnostic.category}/${diagnostic.code}] ${diagnostic.message}`, 'err');
+    }
+
+    status('Генерирую архив...', 94);
     const archive = await zip.generateAsync({ type: 'blob', streamFiles: true });
     log(`Архив: ${(archive.size / 1024 / 1024).toFixed(2)} MB, ${catalog.resources.length + 1} файлов`, 'ok');
 
-    status('Скачиваю...', 95);
+    status('Скачиваю...', 97);
     await downloadArchiveBlob(archive, `${domain}.zip`);
 
     await captureStorage.cleanupMission(missionId);
     exportingMissionId = null;
 
-    status('Готово', 100);
-    log('Готово. Архив содержит статическую офлайн-копию.', 'ok');
+    status(validation.status === 'ready' ? 'Архив готов' : `Архив скачан: ${validation.status}`, 100);
+    log('Архив скачан. Результат проверки сохранён в validation-report.json.', validation.status === 'ready' ? 'ok' : 'err');
   } catch (error) {
     if (missionId) {
       await captureStorage.saveMission(missionId, {
@@ -1786,6 +2132,12 @@ btnCapture.addEventListener('click', () => capture());
 
 btnCancelCapture.addEventListener('click', async () => {
   btnCancelCapture.disabled = true;
+  if (activeValidation) {
+    activeValidation.cancelled = true;
+    status('Отменяю проверку архива...');
+    if (activeValidation.tabId) await chrome.tabs.remove(activeValidation.tabId).catch(() => {});
+    return;
+  }
   status('Отменяю захват...');
   const result = await chrome.runtime.sendMessage({ action: 'cancelCapture', reason: 'user-cancelled' }).catch((error) => ({ ok: false, error: error.message }));
   if (!result || !result.ok) log((result && result.error) || 'Не удалось отменить захват', 'err');

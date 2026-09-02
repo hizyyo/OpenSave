@@ -34,6 +34,7 @@ if (!failures.length) {
   if (!report.completeness || typeof report.completeness.score !== 'number') failures.push('Completeness score is missing');
   const manifest = JSON.parse(readFileSync(join(archivePath, 'sitesaver-manifest.json'), 'utf8'));
   if (manifest.format !== 'sitesaver-offline-archive' || !manifest.sourceUrl) failures.push('Archive manifest is incomplete');
+  if (manifest.version !== 2 && manifest.version !== 3) failures.push('Archive manifest version must be 2 or 3');
   if (existsSync(join(archivePath, 'package.json'))) failures.push('Archive must not require a Node.js package.json');
 
   const sourceDocument = join(archivePath, 'assets', new URL(report.pageUrl || 'https://example.invalid').hostname, 'index.html');
