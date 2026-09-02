@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import PrivacyGuardrails from '../privacy-guardrails.js';
 import ArchiveValidator from '../archive-validator.js';
 import CaptureGraph from '../capture-graph.js';
+import ArchiveOptimizer from '../archive-optimizer.js';
 
 const secrets = {
   bearer: 'Bearer bearer_secret_value_1234567890',
@@ -126,6 +127,7 @@ const context = vm.createContext({
   chrome: { runtime: { onMessage: { addListener() {} } } },
   OpenSaveCaptureGraph: {}, OpenSaveCaptureStorage: { createCaptureStorage: () => ({ initialize: async () => {} }) },
   OpenSaveResourceParser: {}, OpenSaveArchiveValidator: {}, OpenSavePrivacyGuardrails: PrivacyGuardrails,
+  OpenSaveArchiveOptimizer: ArchiveOptimizer,
   JSZip: function JSZip() {}
 });
 vm.runInContext(sidepanelSource, context);

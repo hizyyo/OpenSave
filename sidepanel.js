@@ -13,11 +13,13 @@ const reportEl = document.getElementById('report');
 const btnPickElement = document.getElementById('btnPickElement');
 const captureModeEl = document.getElementById('captureMode');
 const btnCancelCapture = document.getElementById('btnCancelCapture');
+const archiveLimitMbEl = document.getElementById('archiveLimitMb');
 const CaptureGraph = OpenSaveCaptureGraph;
 const CaptureStorage = OpenSaveCaptureStorage;
 const ResourceParser = OpenSaveResourceParser;
 const ArchiveValidator = OpenSaveArchiveValidator;
 const PrivacyGuardrails = OpenSavePrivacyGuardrails;
+const ArchiveOptimizer = OpenSaveArchiveOptimizer;
 const captureStorage = CaptureStorage.createCaptureStorage();
 const captureStorageReady = captureStorage.initialize();
 let exportingMissionId = null;
@@ -37,6 +39,7 @@ const MAX_PAGES = 40;
 const MAX_FALLBACK_FILE_SIZE = 200 * 1024 * 1024;
 const GLTF_EXTENSION = /\.gltf(?:$|[?#])/i;
 const SOURCE_MAP_EXPRESSION = /\/\/[#@]\s*sourceMappingURL=([^\s]+)/gi;
+const SOURCE_MAP_COMMENT_EXPRESSION = /(?:\/\/[#@]\s*sourceMappingURL=[^\r\n]*|\/\*[#@]\s*sourceMappingURL=[^*]*\*\/)/gi;
 
 async function hydrateDurableProjection(resources) {
   await captureStorageReady;
@@ -152,10 +155,11 @@ function renderReport(report) {
   const refetched = report.captureGraph && report.captureGraph.provenance.refetched.responses || 0;
   const validation = report.validation;
   const privacy = report.privacy;
+  const optimization = report.optimization;
   const validationLabel = validation && ({ ready: 'Готово', partial: 'Частично', failed: 'Ошибка', cancelled: 'Проверка отменена' }[validation.status] || validation.status);
   const validationClass = validation && validation.status !== 'ready' ? 'warn' : '';
 
-  reportEl.innerHTML = `<strong>Технические подробности</strong><br>${privacy ? `<span class="warn">Архив приватный: ${privacy.redactionCount || 0} редактирований, ${(privacy.exclusions || []).length} исключений; проверка метаданных не делает архив безопасным для публикации.</span><br>` : ''}${validation ? `<span class="${validationClass}">Проверка архива: <strong>${escapeHtml(validationLabel)}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${escapeHtml(quotaFailure.reason)}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
+  reportEl.innerHTML = `<strong>Технические подробности</strong><br>${privacy ? `<span class="warn">Архив приватный: ${privacy.redactionCount || 0} редактирований, ${(privacy.exclusions || []).length} исключений; проверка метаданных не делает архив безопасным для публикации.</span><br>` : ''}${optimization ? `Оптимизация: ${ArchiveOptimizer.formatBytes(optimization.logicalBytes ?? optimization.logicalResourceBytes)} логически, ${ArchiveOptimizer.formatBytes(optimization.physicalBytes ?? optimization.physicalResourceBytes)} физически; сэкономлено ${ArchiveOptimizer.formatBytes(optimization.bytesSaved ?? optimization.physicalBytesSaved)}, исключено ${(optimization.exclusions || []).length}.<br>` : ''}${validation ? `<span class="${validationClass}">Проверка архива: <strong>${escapeHtml(validationLabel)}</strong></span> (${validation.checkedRoutes}/${validation.totalRoutes} маршрутов, ${validation.issueCount ?? validation.diagnostics.length} замечаний, ${(validation.durationMs / 1000).toFixed(1)} с)<br>` : ''}${quotaFailure ? `<span class="warn">${escapeHtml(quotaFailure.reason)}</span><br>` : ''}${completeness ? `Полнота: <strong>${completeness.score}%</strong> (${completeness.saved}/${completeness.discovered} зависимостей)<br>` : ''}${typeof savedPageCount === 'number' ? `HTML-страниц: ${savedPageCount}<br>` : ''}Кэш: ${report.cacheResources || 0}/${report.cacheEntries || 0} сохранено<br>Iframe/worker: ${(report.childTargets || []).length}<br>${refetched ? `Дозагружено openSave: ${refetched} (не CDP-наблюдение)<br>` : ''}${missing ? `<span class="warn">Недоступные ассеты: ${missing}</span><br>` : 'Недоступных ассетов не найдено'}${pages ? `<span class="warn">Страницы с 404: ${pages}</span><br>` : ''}${truncated ? `<span class="warn">Лимит обхода достигнут: ${truncated}</span><br>` : ''}${diagnostics ? `Диагностика сети: ${diagnostics} (аналитика/API не считаются потерей ассетов)` : ''}`;
   detailsToggleEl.style.display = 'flex';
 }
 
@@ -168,6 +172,13 @@ function addReportItem(report, type, item) {
 function finalizeReport(report, catalog) {
   const finalReport = structuredClone(report || {});
   const savedUrls = new Set(catalog.byUrl.keys());
+  const excludedUrls = new Set();
+  for (const item of finalReport.optimizationExclusions || []) {
+    for (const value of [item.url, ...(item.aliases || [])]) {
+      if (!value) continue;
+      try { excludedUrls.add(normalizeUrl(value)); } catch (error) { /* Invalid exclusion URLs remain diagnostic-only. */ }
+    }
+  }
   const resolved = (item) => {
     try {
       return savedUrls.has(normalizeUrl(item.url));
@@ -175,10 +186,13 @@ function finalizeReport(report, catalog) {
       return false;
     }
   };
-  finalReport.unresolvedResources = (finalReport.unresolvedResources || []).filter((item) => !resolved(item));
-  finalReport.networkFailures = (finalReport.networkFailures || []).filter((item) => !resolved(item));
-  finalReport.unreadableResponses = (finalReport.unreadableResponses || []).filter((item) => !resolved(item));
-  const discovered = new Set((finalReport.discoveredResources || []).map((item) => item.url));
+  const excluded = (item) => {
+    try { return excludedUrls.has(normalizeUrl(item.url)); } catch (error) { return false; }
+  };
+  finalReport.unresolvedResources = (finalReport.unresolvedResources || []).filter((item) => !resolved(item) && !excluded(item));
+  finalReport.networkFailures = (finalReport.networkFailures || []).filter((item) => !resolved(item) && !excluded(item));
+  finalReport.unreadableResponses = (finalReport.unreadableResponses || []).filter((item) => !resolved(item) && !excluded(item));
+  const discovered = new Set((finalReport.discoveredResources || []).map((item) => item.url).filter((url) => !excludedUrls.has(url)));
   const saved = [...discovered].filter((url) => savedUrls.has(url)).length;
   finalReport.completeness = {
     discovered: discovered.size,
@@ -482,6 +496,7 @@ function rewriteHtmlResource(html, baseUrl, resolver, diagnosticSink = []) {
     const expression = /(?:\.src\s*=|setAttribute\(\s*['"]src['"]\s*,)\s*['"]([^'"]+)['"]/gi;
     let match;
     while ((match = expression.exec(source)) !== null) inlineScriptSources.add(match[1]);
+    element.textContent = source.replace(SOURCE_MAP_COMMENT_EXPRESSION, '');
   });
   queryAll('script[src]').forEach((element) => {
     if (inlineScriptSources.has(element.getAttribute('src') || '')) element.remove();
@@ -592,13 +607,15 @@ function createOfflineServiceWorker(resources, snapshots, captureMisses = []) {
   const resourceRouteOrigins = new Map();
   for (const resource of resources) {
     try {
-      const url = new URL(resource.url);
-      url.hash = '';
-      resourceUrls[url.href] = `/${resource.localPath}`;
-      const key = url.pathname + url.search;
-      if (!resourceRouteOrigins.has(key)) resourceRouteOrigins.set(key, new Set());
-      resourceRouteOrigins.get(key).add(url.origin);
-      resourceRoutes[key] = `/${resource.localPath}`;
+      for (const candidate of [resource.url, ...(resource.aliases || [])]) {
+        const url = new URL(candidate);
+        url.hash = '';
+        resourceUrls[url.href] = `/${resource.localPath}`;
+        const key = url.pathname + url.search;
+        if (!resourceRouteOrigins.has(key)) resourceRouteOrigins.set(key, new Set());
+        resourceRouteOrigins.get(key).add(url.origin);
+        resourceRoutes[key] = `/${resource.localPath}`;
+      }
     } catch (error) {
       // Invalid resource URLs are already reported during catalog creation.
     }
@@ -1170,8 +1187,11 @@ function createOfflineReplayScript(snapshots, renderedPages = []) {
 function createCatalog(bodies, pageUrl) {
   const resources = [];
   const byUrl = new Map();
+  const byContent = new Map();
   const routePages = new Map();
   const usedPaths = new Set();
+  const stats = { logicalBytes: 0, physicalBytes: 0, deduplicatedBytes: 0, duplicateBodies: 0 };
+  const exclusions = [];
 
   const add = (resource) => {
     let url;
@@ -1182,6 +1202,25 @@ function createCatalog(bodies, pageUrl) {
     }
     if (resource.routePage && resource.routeId && routePages.has(resource.routeId)) return routePages.get(resource.routeId);
     if (!resource.routePage && byUrl.has(url)) return byUrl.get(url);
+
+    const size = ArchiveOptimizer.bodySize(resource.body, resource.base64Encoded);
+    stats.logicalBytes += size;
+    if (ArchiveOptimizer.isSourceMap({ ...resource, url })) {
+      exclusions.push({ kind: 'source-map', url, bytes: size, reason: 'excluded-by-default' });
+      return null;
+    }
+    const deduplicationKey = ArchiveOptimizer.deduplicationKey(resource, url);
+    if (deduplicationKey && byContent.has(deduplicationKey)) {
+      const existing = byContent.get(deduplicationKey);
+      existing.aliases = [...new Set([...(existing.aliases || []), url, ...(resource.aliases || [])])];
+      existing.evidenceRefs = [...new Set([...(existing.evidenceRefs || []), ...(resource.evidenceRefs || [])])];
+      existing.preserveUrl = Boolean(existing.preserveUrl || resource.preserveUrl);
+      byUrl.set(url, existing);
+      for (const alias of resource.aliases || []) byUrl.set(normalizeUrl(alias), existing);
+      stats.deduplicatedBytes += size;
+      stats.duplicateBodies += 1;
+      return existing;
+    }
 
     const basePath = archivePathFor(url, resource.mimeType);
     let localPath = basePath;
@@ -1194,9 +1233,12 @@ function createCatalog(bodies, pageUrl) {
       suffix += 1;
     }
 
-    const entry = { ...resource, url, localPath };
+    const entry = { ...resource, url, localPath, aliases: [...new Set(resource.aliases || [])] };
     usedPaths.add(localPath);
+    stats.physicalBytes += size;
+    if (deduplicationKey) byContent.set(deduplicationKey, entry);
     if (!byUrl.has(url)) byUrl.set(url, entry);
+    for (const alias of entry.aliases) byUrl.set(normalizeUrl(alias), entry);
     if (resource.routePage && resource.routeId) routePages.set(resource.routeId, entry);
     resources.push(entry);
     return entry;
@@ -1204,14 +1246,143 @@ function createCatalog(bodies, pageUrl) {
 
   bodies.forEach(add);
 
-  return { resources, byUrl, routePages, add };
+  const exclude = (predicate, reason) => {
+    const removed = [];
+    for (let index = resources.length - 1; index >= 0; index -= 1) {
+      const resource = resources[index];
+      if (!predicate(resource)) continue;
+      resources.splice(index, 1);
+      removed.push(resource);
+      const bytes = ArchiveOptimizer.bodySize(resource.body, resource.base64Encoded);
+      stats.physicalBytes = Math.max(0, stats.physicalBytes - bytes);
+      exclusions.push({ kind: reason, url: resource.url, aliases: resource.aliases || [], bytes, reason: 'user-excluded' });
+      for (const [url, candidate] of [...byUrl.entries()]) {
+        if (candidate === resource) byUrl.delete(url);
+      }
+      if (resource.routeId) routePages.delete(resource.routeId);
+    }
+    return removed.reverse();
+  };
+
+  return { resources, byUrl, routePages, stats, exclusions, add, exclude };
+}
+
+function applyLargeMediaChoice(catalog, report) {
+  const candidates = catalog.resources.filter((resource) => ArchiveOptimizer.isLargeMedia(resource));
+  if (!candidates.length) {
+    catalog.mediaDecision = { decision: 'not-applicable', count: 0, bytes: 0 };
+    return [];
+  }
+  const totalBytes = candidates.reduce((total, resource) => total + ArchiveOptimizer.bodySize(resource.body, resource.base64Encoded), 0);
+  const include = window.confirm(`Найдено крупных видео/аудио: ${candidates.length} (${ArchiveOptimizer.formatBytes(totalBytes)}).\n\nOK: включить в архив. Отмена: пропустить крупные медиа и уменьшить архив.`);
+  catalog.mediaDecision = { decision: include ? 'included' : 'excluded', count: candidates.length, bytes: totalBytes };
+  if (include) return [];
+  const selected = new Set(candidates);
+  const removed = catalog.exclude((resource) => selected.has(resource), 'large-media');
+  for (const resource of removed) {
+    addReportItem(report, 'optimizationExclusions', {
+      kind: 'large-media',
+      url: resource.url,
+      bytes: ArchiveOptimizer.bodySize(resource.body, resource.base64Encoded),
+      reason: 'user-excluded'
+    });
+  }
+  return removed;
+}
+
+function deduplicateSnapshotBodies(resources, snapshots) {
+  const pathsByHash = new Map();
+  const files = [];
+  const stats = { logicalBytes: 0, physicalBytes: 0, deduplicatedBytes: 0, duplicateBodies: 0 };
+  for (const resource of resources) {
+    if (!resource.contentHash || (!resource.preserveUrl && ArchiveOptimizer.isTextResource(resource))) continue;
+    pathsByHash.set(resource.contentHash, `/${resource.localPath}`);
+  }
+  for (const snapshot of snapshots) {
+    if (!snapshot.localPath || snapshot.body == null) continue;
+    const bytes = ArchiveOptimizer.bodySize(snapshot.body, snapshot.base64Encoded);
+    stats.logicalBytes += bytes;
+    if (snapshot.contentHash && pathsByHash.has(snapshot.contentHash)) {
+      snapshot.localPath = pathsByHash.get(snapshot.contentHash);
+      stats.deduplicatedBytes += bytes;
+      stats.duplicateBodies += 1;
+      continue;
+    }
+    if (snapshot.contentHash) pathsByHash.set(snapshot.contentHash, snapshot.localPath);
+    stats.physicalBytes += bytes;
+    files.push(snapshot);
+  }
+  return { files, stats };
+}
+
+function configuredArchiveLimitBytes() {
+  const value = Number(archiveLimitMbEl && archiveLimitMbEl.value);
+  return Number.isFinite(value) && value > 0 ? value * 1024 * 1024 : ArchiveOptimizer.DEFAULT_WARNING_BYTES;
+}
+
+async function estimateZip(zip) {
+  const files = await archiveFiles(zip);
+  return ArchiveOptimizer.estimateArchive([...files.values()].map((file) => ({ ...file, size: file.bytes.byteLength })));
+}
+
+function confirmArchiveEstimate(estimate) {
+  const limitBytes = configuredArchiveLimitBytes();
+  if (estimate.estimatedArchiveBytes <= limitBytes) return true;
+  return window.confirm(`Оценка архива: ${ArchiveOptimizer.formatBytes(estimate.estimatedArchiveBytes)}. Это больше выбранного лимита ${ArchiveOptimizer.formatBytes(limitBytes)}.\n\nПродолжить создание архива?`);
+}
+
+function optimizationSummary(catalog, estimate = null, reportExclusions = [], exportedResources = catalog.resources, snapshotStats = null) {
+  const exclusions = [];
+  const signatures = new Set();
+  for (const item of [...(catalog.exclusions || []), ...(reportExclusions || [])]) {
+    const signature = `${item.kind || ''}\n${item.url || ''}\n${item.reason || ''}`;
+    if (signatures.has(signature)) continue;
+    signatures.add(signature);
+    exclusions.push(item);
+  }
+  const excludedBytes = exclusions.reduce((total, item) => total + (item.bytes || 0), 0);
+  const physicalResourceBytes = exportedResources.reduce((total, resource) => total + ArchiveOptimizer.bodySize(resource.body, resource.base64Encoded), 0);
+  const apiStats = snapshotStats || { logicalBytes: 0, physicalBytes: 0, deduplicatedBytes: 0, duplicateBodies: 0 };
+  const logicalBytes = catalog.stats.logicalBytes + apiStats.logicalBytes;
+  const physicalBytes = physicalResourceBytes + apiStats.physicalBytes;
+  return {
+    schemaVersion: 1,
+    compression: 'DEFLATE-6',
+    sourceMapsIncluded: false,
+    logicalBytes,
+    physicalBytes,
+    bytesSaved: Math.max(0, logicalBytes - physicalBytes),
+    logicalResourceBytes: catalog.stats.logicalBytes,
+    physicalResourceBytes,
+    physicalBytesSaved: Math.max(0, catalog.stats.logicalBytes - physicalResourceBytes),
+    deduplicatedBytes: catalog.stats.deduplicatedBytes,
+    duplicateBodies: catalog.stats.duplicateBodies,
+    apiSnapshotLogicalBytes: apiStats.logicalBytes,
+    apiSnapshotPhysicalBytes: apiStats.physicalBytes,
+    apiSnapshotDeduplicatedBytes: apiStats.deduplicatedBytes,
+    duplicateApiSnapshotBodies: apiStats.duplicateBodies,
+    aliasCount: catalog.resources.reduce((total, resource) => total + (resource.aliases || []).length, 0),
+    largeMedia: catalog.mediaDecision || { decision: 'not-evaluated', count: 0, bytes: 0 },
+    excludedBytes,
+    exclusions,
+    archiveFileCount: estimate && estimate.fileCount || 0,
+    archiveInputBytes: estimate && estimate.physicalBytes || 0,
+    estimatedArchiveBytes: estimate && estimate.estimatedArchiveBytes || 0,
+    estimatedCompressionBytesSaved: estimate && estimate.estimatedCompressionBytesSaved || 0,
+    estimateMethod: estimate && estimate.method || null
+  };
+}
+
+function createArchiveSizeCancellation() {
+  const error = new Error('Создание архива отменено: оценка размера превышает выбранный лимит.');
+  error.code = 'archive-size-cancelled';
+  return error;
 }
 
 async function finalProjectionParity(graph, catalog, replaySnapshots) {
   const projectedBodies = CaptureGraph.projectV1Bodies(graph);
   const projectedPages = CaptureGraph.projectRenderedPages(graph);
   const projectedSnapshots = CaptureGraph.projectV1ApiSnapshots(graph);
-  const bodyFields = ['url', 'mimeType'];
   const snapshotFields = ['url', 'method', 'postData', 'status', 'statusText', 'mimeType'];
   const bodyHash = (item) => item.contentHash || CaptureGraph.contentHashForBody(item.body, item.base64Encoded);
   const renderedDocumentUrls = new Set(projectedPages.map((page) => normalizeUrl(page.url)));
@@ -1222,7 +1393,11 @@ async function finalProjectionParity(graph, catalog, replaySnapshots) {
   const projectedSnapshotHashes = await Promise.all(projectedSnapshots.map(bodyHash));
   const replaySnapshotHashes = await Promise.all(replaySnapshots.map(bodyHash));
   const bodyMatches = expectedBodies.map((item, index) => catalog.resources.some((catalogItem, catalogIndex) =>
-    !catalogItem.routePage && bodyFields.every((field) => item[field] === catalogItem[field]) && Boolean(item.preserveUrl) === Boolean(catalogItem.preserveUrl) && projectedBodyHashes[index] === catalogBodyHashes[catalogIndex]
+    !catalogItem.routePage
+      && (item.url === catalogItem.url || (catalogItem.aliases || []).includes(item.url))
+      && item.mimeType === catalogItem.mimeType
+      && (!item.preserveUrl || Boolean(catalogItem.preserveUrl))
+      && projectedBodyHashes[index] === catalogBodyHashes[catalogIndex]
   ));
   const pageMatches = projectedPages.map((item, index) => catalog.resources.some((catalogItem, catalogIndex) =>
     catalogItem.routePage && catalogItem.routeId === item.routeId && projectedPageHashes[index] === catalogBodyHashes[catalogIndex]
@@ -1264,6 +1439,10 @@ async function collectMissingFiles(html, pageUrl, catalog, report, includePages 
 
   const enqueue = (url, kind, discoveredFrom = ownerEvidenceId, syntaxKind = 'legacy-discovery', reference = null) => {
     const normalized = normalizeUrl(url);
+    if (syntaxKind === 'source-map') {
+      addReportItem(report, 'optimizationExclusions', { kind: 'source-map', url: normalized, reason: 'excluded-by-default' });
+      return;
+    }
     if (kind === 'resource') addReportItem(report, 'discoveredResources', { url: normalized });
     if (graph) {
       CaptureGraph.addDependencyEdge(graph, {
@@ -1433,6 +1612,10 @@ async function collectMissingFiles(html, pageUrl, catalog, report, includePages 
         await saveGraphMission(graph, 'exporting');
       }
       fetched += 1;
+      if (!resource) {
+        log(`Пропущена source map: ${item.url}`);
+        continue;
+      }
       log(`+ ${resource.localPath}`, 'ok');
 
       if (isTextResource(resource)) {
@@ -1490,10 +1673,16 @@ async function rewriteTextResources(resources, resolver, byUrl, graph = null) {
       let rewritten = text;
       let diagnostics = [];
       if (type.startsWith('text/html')) rewritten = rewriteHtmlResource(text, resource.url, resolver, diagnostics);
-      else if (type.startsWith('text/css')) ({ source: rewritten, diagnostics } = rewriteCssUrls(text, resource.url, resolver));
+      else if (type.startsWith('text/css')) {
+        ({ source: rewritten, diagnostics } = rewriteCssUrls(text, resource.url, resolver));
+        rewritten = rewritten.replace(SOURCE_MAP_COMMENT_EXPRESSION, '');
+      }
       else if (type.startsWith('image/svg+xml')) ({ source: rewritten, diagnostics } = ResourceParser.rewriteSvg(text, { baseUrl: resource.url, resolver }));
       else if (isGltfResource(resource)) rewritten = rewriteGltfUrls(text, resource.url, byUrl);
-      else if (/(?:java|ecma)script/.test(type) || /\.(?:js|mjs)(?:$|[?#])/i.test(resource.url)) ({ source: rewritten, diagnostics } = rewriteJavaScriptUrls(text, resource.url, resolver));
+      else if (/(?:java|ecma)script/.test(type) || /\.(?:js|mjs)(?:$|[?#])/i.test(resource.url)) {
+        ({ source: rewritten, diagnostics } = rewriteJavaScriptUrls(text, resource.url, resolver));
+        rewritten = rewritten.replace(SOURCE_MAP_COMMENT_EXPRESSION, '');
+      }
       if (graph) {
         for (const diagnostic of diagnostics) {
           CaptureGraph.addDiagnostic(graph, {
@@ -1547,6 +1736,7 @@ function resetInterface() {
   btnCancelCapture.hidden = true;
   btnCancelCapture.disabled = false;
   captureModeEl.querySelectorAll('input').forEach((input) => { input.disabled = false; });
+  if (archiveLimitMbEl) archiveLimitMbEl.disabled = false;
   currentProgressPercent = 0;
   updateCaptureLabel();
 }
@@ -1568,7 +1758,7 @@ function createSelectedDocument(selected) {
 }
 
 async function downloadZip(zip, filename) {
-  const archive = await zip.generateAsync({ type: 'blob', streamFiles: true });
+  const archive = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } });
   await downloadArchiveBlob(archive, filename);
   return archive.size;
 }
@@ -1874,6 +2064,7 @@ async function exportSelectedElement(selected) {
   btnCapture.disabled = true;
   btnRecord.disabled = true;
   btnPickElement.disabled = true;
+  if (archiveLimitMbEl) archiveLimitMbEl.disabled = true;
   btnPickElement.disabled = true;
   progress.style.display = 'block';
   logEl.textContent = '';
@@ -1944,6 +2135,8 @@ async function exportSelectedElement(selected) {
     const catalog = createCatalog([], selected.pageUrl);
     const fetched = await collectMissingFiles(markup, selected.pageUrl, catalog, report, false, graph);
     log(`Дозагружено зависимостей: ${fetched}`);
+    for (const exclusion of catalog.exclusions) addReportItem(report, 'optimizationExclusions', exclusion);
+    applyLargeMediaChoice(catalog, report);
 
     status('Переписываю пути...', 55);
     const resolver = createResourceResolver(catalog.byUrl, graph);
@@ -1964,29 +2157,47 @@ async function exportSelectedElement(selected) {
     await saveGraphMission(graph, 'completed');
     let finalReport = CaptureGraph.projectReport(graph, finalizeReport(report, catalog));
     const prepared = preparePrivateArtifacts(html, catalog.resources, []);
-    finalReport = PrivacyGuardrails.sanitizeMetadata(finalReport, 'selection.report');
+    const selectionFindings = [...prepared.findings];
+    finalReport = PrivacyGuardrails.sanitizeMetadata(finalReport, 'selection.report', selectionFindings);
     finalReport.privacy = {
       privateByDefault: true,
       safeToShare: false,
-      redactionCount: prepared.findings.length,
-      findings: prepared.findings,
+      redactionCount: selectionFindings.length,
+      findings: selectionFindings,
       exclusions: prepared.exclusions
     };
+    finalReport.optimization = optimizationSummary(catalog, null, report.optimizationExclusions, prepared.resources);
     renderReport(finalReport);
 
     status('Собираю точечный архив...', 75);
     const zip = new JSZip();
     zip.file('index.html', html);
-    zip.file('sitesaver-selection.json', JSON.stringify(PrivacyGuardrails.sanitizeMetadata({
+    const selectionManifest = PrivacyGuardrails.sanitizeMetadata({
       pageUrl: selected.pageUrl,
       label: selected.label,
       privacy: { privateByDefault: true, safeToShare: false },
+      optimization: finalReport.optimization,
       exportedAt: new Date().toISOString()
-    }, 'selection.metadata'), null, 2));
+    }, 'selection.metadata');
+    zip.file('sitesaver-selection.json', JSON.stringify(selectionManifest, null, 2));
     zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
     for (const resource of prepared.resources) {
       zip.file(resource.localPath, resource.body, resource.base64Encoded ? { base64: true } : undefined);
     }
+
+    const estimate = await estimateZip(zip);
+    finalReport.optimization = PrivacyGuardrails.sanitizeMetadata(
+      optimizationSummary(catalog, estimate, report.optimizationExclusions, prepared.resources),
+      'selection.optimization',
+      selectionFindings
+    );
+    finalReport.privacy.redactionCount = selectionFindings.length;
+    selectionManifest.optimization = finalReport.optimization;
+    selectionManifest.privacy.redactionCount = selectionFindings.length;
+    selectionManifest.privacy.actions = selectionFindings;
+    zip.file('sitesaver-selection.json', JSON.stringify(selectionManifest, null, 2));
+    zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
+    if (!confirmArchiveEstimate(estimate)) throw createArchiveSizeCancellation();
 
     status('Скачиваю блок...', 92);
     const size = await downloadZip(zip, 'sitesaver-selection.zip');
@@ -1996,7 +2207,7 @@ async function exportSelectedElement(selected) {
     status('Готово', 100);
   } catch (error) {
     if (exportingMissionId) {
-      if (error.code === 'private-data-risk') {
+      if (error.code === 'private-data-risk' || error.code === 'archive-size-cancelled') {
         await captureStorage.cleanupMission(exportingMissionId).catch(() => {});
       } else {
         await captureStorage.saveMission(exportingMissionId, {
@@ -2024,6 +2235,7 @@ async function capture(action = 'fullCapture') {
   btnRecord.disabled = true;
   btnCapture.textContent = 'Захват...';
   captureModeEl.querySelectorAll('input').forEach((input) => { input.disabled = true; });
+  if (archiveLimitMbEl) archiveLimitMbEl.disabled = true;
   btnCancelCapture.hidden = mode !== 'deep';
   progress.style.display = 'block';
   logEl.textContent = '';
@@ -2080,6 +2292,8 @@ async function capture(action = 'fullCapture') {
     setStage('Сохранение медиа и данных');
     const fetched = await collectMissingFiles(html, pageUrl, catalog, captureReport, false, graph, fallbackPageUrls);
     log(`Дозагружено ссылок и ресурсов: ${fetched}`);
+    for (const exclusion of catalog.exclusions) addReportItem(captureReport, 'optimizationExclusions', exclusion);
+    applyLargeMediaChoice(catalog, captureReport);
     const pageOrigin = new URL(pageUrl).origin;
     const savedPageCount = graph.routes.filter((route) => route.state === 'captured').length || catalog.resources.filter((resource) => {
       try {
@@ -2169,6 +2383,8 @@ async function capture(action = 'fullCapture') {
     const prepared = preparePrivateArtifacts(fixedHtml, catalog.resources, replaySnapshots);
     const exportResources = prepared.resources;
     const exportSnapshots = prepared.snapshots;
+    const snapshotStorage = deduplicateSnapshotBodies(exportResources, exportSnapshots);
+    const exportSnapshotFiles = snapshotStorage.files;
     const reportFindings = [];
     const sanitizedReport = PrivacyGuardrails.sanitizeMetadata(finalReport, 'archive.report', reportFindings);
     Object.keys(finalReport).forEach((key) => delete finalReport[key]);
@@ -2183,6 +2399,7 @@ async function capture(action = 'fullCapture') {
       findings: redactionAudit,
       exclusions: prepared.exclusions
     };
+    finalReport.optimization = optimizationSummary(catalog, null, captureReport.optimizationExclusions, exportResources, snapshotStorage.stats);
 
     status('Собираю архив...', 75);
     const zip = new JSZip();
@@ -2212,6 +2429,7 @@ async function capture(action = 'fullCapture') {
         actions: redactionAudit,
         exclusions: prepared.exclusions
       },
+      optimization: finalReport.optimization,
       resourceCount: exportResources.length,
       pageCount: savedPageCount,
       apiSnapshotCount: exportSnapshots.length,
@@ -2226,7 +2444,7 @@ async function capture(action = 'fullCapture') {
     zip.file('open-unix.sh', createUnixLauncher(), { unixPermissions: '755' });
     zip.file('validate-windows.bat', createWindowsValidatorLauncher());
     zip.file('validate-unix.sh', createUnixValidatorLauncher(), { unixPermissions: '755' });
-    exportSnapshots.filter((snapshot) => snapshot.localPath).forEach((snapshot) => {
+    exportSnapshotFiles.forEach((snapshot) => {
       zip.file(snapshot.localPath.slice(1), snapshot.body, snapshot.base64Encoded ? { base64: true } : undefined);
     });
     for (const resource of exportResources) {
@@ -2254,7 +2472,7 @@ async function capture(action = 'fullCapture') {
     const requiredFiles = [
       ...['index.html', '404.html', 'replay-matcher.js', 'replay-misses.json', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'archive-validator.js', 'archive-validator-companion.mjs', 'validate-windows.bat', 'validate-unix.sh', 'validation-plan.json', 'validation-report.json'].map((path) => ({ path, critical: true })),
       ...exportResources.map((resource) => ({ path: resource.localPath, critical: true, evidenceRefs: resource.evidenceRefs || [] })),
-      ...exportSnapshots.filter((snapshot) => snapshot.localPath).map((snapshot) => ({ path: snapshot.localPath, critical: true, evidenceRefs: snapshot.evidenceRefs || [] }))
+      ...[...new Map(exportSnapshots.filter((snapshot) => snapshot.localPath).map((snapshot) => [snapshot.localPath, snapshot])).values()].map((snapshot) => ({ path: snapshot.localPath, critical: true, evidenceRefs: snapshot.evidenceRefs || [] }))
     ];
     const validationInput = {
       rootUrl: '/',
@@ -2270,6 +2488,20 @@ async function capture(action = 'fullCapture') {
     validationPlan.baselineDiagnostics = ArchiveValidator.inputDiagnostics({ report: finalReport, routes: sanitizedCaptureRoutes, replayMisses: exportReplayMisses });
     zip.file('validation-plan.json', JSON.stringify(validationPlan, null, 2));
     zip.file('validation-report.json', JSON.stringify(ArchiveValidator.finalize({ plan: validationPlan, diagnostics: [{ category: 'validator-infrastructure', code: 'validation-pending', severity: 'warning', message: 'Archive validation has not completed.' }], totalRoutes: validationPlan.routes.length + 1 }), null, 2));
+    const estimate = await estimateZip(zip);
+    finalReport.optimization = PrivacyGuardrails.sanitizeMetadata(
+      optimizationSummary(catalog, estimate, captureReport.optimizationExclusions, exportResources, snapshotStorage.stats),
+      'archive.optimization',
+      redactionAudit
+    );
+    finalReport.privacy.redactionCount = redactionAudit.length;
+    archiveManifest.privacy.redactionCount = redactionAudit.length;
+    archiveManifest.privacy.redactedCategories = [...new Set(redactionAudit.map((finding) => finding.category))];
+    archiveManifest.optimization = finalReport.optimization;
+    zip.file('sitesaver-report.json', JSON.stringify(finalReport, null, 2));
+    zip.file('sitesaver-manifest.json', JSON.stringify(archiveManifest, null, 2));
+    log(`Оценка архива: ${ArchiveOptimizer.formatBytes(estimate.estimatedArchiveBytes)}; дедупликация сэкономила ${ArchiveOptimizer.formatBytes(catalog.stats.deduplicatedBytes)}.`);
+    if (!confirmArchiveEstimate(estimate)) throw createArchiveSizeCancellation();
     const validation = await validateArchive(zip, validationInput);
     finalReport.validation = validation;
     archiveManifest.validationStatus = validation.status;
@@ -2317,7 +2549,7 @@ async function capture(action = 'fullCapture') {
 
     setStage('Готово');
     status('Генерирую архив...', 94);
-    const archive = await zip.generateAsync({ type: 'blob', streamFiles: true });
+    const archive = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } });
     log(`Архив: ${(archive.size / 1024 / 1024).toFixed(2)} MB, ${exportResources.length + 1} файлов`, 'ok');
 
     status('Скачиваю...', 97);
@@ -2329,11 +2561,11 @@ async function capture(action = 'fullCapture') {
     status(validation.status === 'ready' ? 'Архив готов' : `Архив скачан: ${validation.status}`, 100);
     log('Архив скачан. Результат проверки сохранён в validation-report.json.', validation.status === 'ready' ? 'ok' : 'err');
   } catch (error) {
-    const privacyCancelled = error.code === 'private-data-risk';
-    setStage(privacyCancelled ? 'Отменено' : 'Ошибка');
+    const userCancelled = error.code === 'private-data-risk' || error.code === 'archive-size-cancelled';
+    setStage(userCancelled ? 'Отменено' : 'Ошибка');
     if (summaryCardEl) {
       renderSummary({
-        status: privacyCancelled ? 'cancelled' : 'failed',
+        status: userCancelled ? 'cancelled' : 'failed',
         savedPages: 0,
         totalDiscoveredPages: 1,
         savedFiles: 0,
@@ -2345,7 +2577,7 @@ async function capture(action = 'fullCapture') {
       });
     }
     if (missionId) {
-      if (privacyCancelled) {
+      if (userCancelled) {
         await captureStorage.cleanupMission(missionId).catch(() => {});
       } else {
         await captureStorage.saveMission(missionId, {

@@ -17,6 +17,8 @@ h1{font-size:16px;margin-bottom:2px}
 .capture-mode label:has(input:checked){border-color:#22c55e;background:#102418}
 .capture-mode strong{display:block;font-size:11px;color:#e4ded7;margin-bottom:2px}
 .capture-mode span{display:block;font-size:10px;color:#888;line-height:1.25}
+.archive-options{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-2px 0 10px;color:#888;font-size:10px}
+.archive-options input{width:74px;background:#15171e;color:#e4ded7;border:1px solid #303747;border-radius:5px;padding:5px}
 .progress{display:none;background:#212531;border-radius:6px;padding:12px;margin-bottom:8px}
 .progress-stage{font-size:11px;color:#22c55e;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
 .progress-bar{height:4px;background:#333;border-radius:2px;margin-top:8px;overflow:hidden}
@@ -49,6 +51,7 @@ h1{font-size:16px;margin-bottom:2px}
   <label><input type="radio" name="captureMode" value="quick" checked><strong>Быстро</strong><span>Текущая страница и прямые зависимости</span></label>
   <label><input type="radio" name="captureMode" value="deep"><strong>Глубоко</strong><span>Сайт, UI-состояния, API, cache, crawler</span></label>
 </div>
+<label class="archive-options" for="archiveLimitMb"><span>Предупреждать о размере архива после</span><span><input id="archiveLimitMb" type="number" min="25" step="25" value="500"> MB</span></label>
 <button class="btn btn-capture" id="btnCapture">Скачать страницу</button>
 <button class="btn btn-secondary" id="btnPickElement">Выбрать блок на странице</button>
 <button class="btn btn-secondary" id="btnRecord">Записать сценарий</button>
@@ -72,6 +75,7 @@ h1{font-size:16px;margin-bottom:2px}
 <script src="rendered-page-crawler.js"></script>
 <script src="replay-matcher.js"></script>
 <script src="privacy-guardrails.js"></script>
+<script src="archive-optimizer.js"></script>
 <script src="archive-validator.js"></script>
 <script src="sidepanel.js"></script>
 </body></html>

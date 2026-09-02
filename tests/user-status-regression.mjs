@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import PrivacyGuardrails from '../privacy-guardrails.js';
+import ArchiveOptimizer from '../archive-optimizer.js';
 
 const html = readFileSync(new URL('../sidepanel.html', import.meta.url), 'utf8');
 const source = readFileSync(new URL('../sidepanel.js', import.meta.url), 'utf8');
@@ -42,6 +43,7 @@ const context = vm.createContext({
   OpenSaveResourceParser: {},
   OpenSaveArchiveValidator: {},
   OpenSavePrivacyGuardrails: PrivacyGuardrails,
+  OpenSaveArchiveOptimizer: ArchiveOptimizer,
   JSZip: function JSZip() {}
 });
 
