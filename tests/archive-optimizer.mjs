@@ -37,6 +37,10 @@ const context = vm.createContext({
 });
 vm.runInContext(source, context);
 
+const largeAppendTarget = [];
+context.appendItems(largeAppendTarget, Array.from({ length: 150000 }, (_, index) => index));
+assert.equal(largeAppendTarget.length, 150000, 'Large result sets must not be appended through the call stack');
+
 const duplicateBody = new Uint8Array([1, 2, 3, 4]);
 const catalog = context.createCatalog([
   { url: 'https://a.test/media/logo.png', mimeType: 'image/png', body: duplicateBody, contentHash: 'sha256:same' },

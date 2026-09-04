@@ -17,7 +17,7 @@
     { category: 'jwt-token', confidence: 'high', expression: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.+/=-]{8,}\b/g },
     { category: 'authorization-token', confidence: 'high', expression: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi },
     { category: 'api-key', confidence: 'high', expression: /\b(?:AKIA[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{16,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,})\b/g },
-    { category: 'generic-secret', confidence: 'medium', expression: /(?:api[_-]?key|client[_-]?secret|credential|password|refresh[_-]?token|secret|session(?:id)?|token)['"]?\s*[:=]\s*['"]?[A-Za-z0-9_\-.~+/=]{12,}/gi }
+    { category: 'generic-secret', confidence: 'medium', expression: /(?:api[_-]?key|client[_-]?secret|credential|password|refresh[_-]?token|secret|session(?:id)?|token)['"]?\s*[:=]\s*(?:(['"])[A-Za-z0-9_\-.~+/=]{12,}\1|(?=[A-Za-z0-9_~+/=-]{12,})(?=[A-Za-z0-9_~+/=-]*\d)[A-Za-z0-9_~+/=-]{12,})/gi }
   ];
 
   function lengthBucket(value) {
@@ -121,8 +121,14 @@
       }
       return { url: url.href, findings, redactions: findings };
     } catch (error) {
-      const result = sanitizeText(String(rawUrl || ''), location);
-      return { url: result.value, findings: result.findings, redactions: result.findings };
+      const findings = [];
+      const withSafeQuery = String(rawUrl || '').replace(/([?&#])([^=&#\s]+)=([^&#\s]*)/g, (match, prefix, name, value) => {
+        if (!isSensitiveQueryValue(name, value)) return match;
+        findings.push(finding('url-parameter', `${location}.query.${name}`, 'high', value));
+        return `${prefix}${name}=${REDACTED}`;
+      });
+      const url = replaceDetectedSecrets(withSafeQuery, location, findings);
+      return { url, findings, redactions: findings };
     }
   }
 

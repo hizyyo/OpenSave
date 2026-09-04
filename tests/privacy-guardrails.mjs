@@ -72,10 +72,15 @@ const harmless = [
   'token budget is 4096',
   'session timeout is 30 minutes',
   'password reset instructions',
-  'https://example.test/?code=docs'
+  'https://example.test/?code=docs',
+  'SessionId=i.session_id',
+  'secret=this._globalSecret'
 ];
 for (const sample of harmless) assert.equal(PrivacyGuardrails.scanText(sample).length, 0, `False positive: ${sample}`);
 assert.equal(PrivacyGuardrails.sanitizeUrl('https://example.test/?code=docs&key=id').findings.length, 0);
+const malformedUrl = PrivacyGuardrails.sanitizeUrl(`https://%zz.invalid/path?access_token=${secrets.apiKey}`, 'malformed.url');
+assert.equal(malformedUrl.findings.length, 1);
+assertNoSecrets(malformedUrl, 'malformed URL');
 
 const sanitizedLog = PrivacyGuardrails.sanitizeText(`Failed ${secrets.bearer} at https://example.test/?access_token=${secrets.apiKey}`, 'log');
 assert(sanitizedLog.findings.length >= 2);

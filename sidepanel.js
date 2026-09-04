@@ -233,10 +233,18 @@ function extractResourceReferences(html, baseUrl, ownerArtifact) {
   );
 }
 
+function appendItems(target, items) {
+  for (const item of items || []) target.push(item);
+  return target;
+}
+
 function queryAllWithSnapshotTemplates(root, selector) {
-  const matches = [...root.querySelectorAll(selector)];
-  for (const template of root.querySelectorAll('template[data-opensave-shadowroot]')) {
-    matches.push(...queryAllWithSnapshotTemplates(template.content, selector));
+  const matches = [];
+  const pending = [root];
+  while (pending.length) {
+    const current = pending.pop();
+    appendItems(matches, current.querySelectorAll(selector));
+    for (const template of current.querySelectorAll('template[data-opensave-shadowroot]')) pending.push(template.content);
   }
   return matches;
 }
@@ -448,7 +456,7 @@ function rewriteHtmlResource(html, baseUrl, resolver, diagnosticSink = []) {
   let source = html;
   try {
     const rewritten = ResourceParser.rewriteHtml(html, { baseUrl, resolver });
-    diagnosticSink.push(...rewritten.diagnostics);
+    appendItems(diagnosticSink, rewritten.diagnostics);
     source = rewritten.source;
   } catch (error) {
     diagnosticSink.push({
@@ -1814,6 +1822,42 @@ function injectValidationMarker(html, marker) {
   return `${script}${html}`;
 }
 
+function validationRouteKey(urlValue) {
+  const url = new URL(urlValue);
+  const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+  return `${pathname}${url.search}${url.hash}`;
+}
+
+function createValidationRoutes(resources, pageUrl) {
+  const rootKey = validationRouteKey(pageUrl);
+  const seenKeys = new Set();
+  const routes = [];
+
+  for (const resource of resources) {
+    if (!(resource.mimeType || '').toLowerCase().startsWith('text/html')) continue;
+    const marker = resource.routeId || `page:${shortHash(resource.localPath || resource.url || 'html')}`;
+    const candidates = [resource.routeUrl || resource.url, resource.url, ...(resource.aliases || [])].filter(Boolean);
+    let added = false;
+    for (const candidate of candidates) {
+      let key;
+      try { key = validationRouteKey(candidate); } catch (error) { continue; }
+      if (key === rootKey || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      routes.push({
+        routeId: !added && resource.routeId ? resource.routeId : `route:${shortHash(`${key}\n${resource.localPath}`)}`,
+        url: candidate,
+        localPath: resource.localPath,
+        expectedMarker: marker,
+        evidenceRefs: [resource.routeId, ...(resource.evidenceRefs || [])].filter(Boolean)
+      });
+      added = true;
+    }
+    if (added) resource.body = injectValidationMarker(String(resource.body || ''), marker);
+  }
+
+  return routes;
+}
+
 function archiveMimeType(path) {
   const extension = path.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] || '';
   return {
@@ -1902,7 +1946,12 @@ async function validateArchive(zip, input) {
     debuggeeSessions.add(key);
     await chrome.debugger.sendCommand(debuggeeId, 'Runtime.enable').catch(() => {});
     await chrome.debugger.sendCommand(debuggeeId, 'Log.enable').catch(() => {});
-    await chrome.debugger.sendCommand(debuggeeId, 'Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    try {
+      await chrome.debugger.sendCommand(debuggeeId, 'Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    } catch (error) {
+      if (!child || !/(?:-32601|Fetch\.enable.*(?:wasn't found|not found))/i.test(error.message)) throw error;
+      addDiagnostic({ category: 'validator-infrastructure', code: 'child-fetch-unavailable', severity: 'warning', message: 'Chrome does not expose request interception for this child target; use the local companion for final validation.' });
+    }
     if (child) await chrome.debugger.sendCommand(debuggeeId, 'Runtime.runIfWaitingForDebugger').catch(() => {});
   };
 
@@ -2218,8 +2267,10 @@ async function exportSelectedElement(selected) {
         await captureStorage.cleanupTemporaryBodies(exportingMissionId).catch(() => {});
       }
     }
-    status(`Ошибка: ${error.message}`);
-    log(error.message, 'err');
+    const failedStage = currentProgressStage || 'неизвестный этап';
+    status(`Ошибка: этап «${failedStage}»: ${error.message}`);
+    log(`Ошибка на этапе «${failedStage}»: ${error.message}`, 'err');
+    console.error(`openSave capture failed at ${failedStage}\n${error && error.stack || error}`);
   } finally {
     exportingMissionId = null;
     progress.style.display = 'none';
@@ -2332,7 +2383,7 @@ async function capture(action = 'fullCapture') {
       const origins = [...new Set(matches.map((snapshot) => new URL(snapshot.url).origin))];
       return origins.length > 1 ? [{ reasonCode: 'ambiguous', evidenceRefs: matches.flatMap((snapshot) => snapshot.evidenceRefs || []), evidence: { identity, candidateCount: matches.length, origins } }] : [];
     });
-    replayMisses.push(...replayAmbiguities);
+    appendItems(replayMisses, replayAmbiguities);
     const supportedReplayCount = replaySnapshots.filter((snapshot) => !replayMisses.some((miss) => miss.evidence && miss.evidence.exchangeId === snapshot.exchangeId)).length;
     captureReport.replay = {
       schemaVersion: 1,
@@ -2406,7 +2457,7 @@ async function capture(action = 'fullCapture') {
     const rootValidationMarker = `root:${graph.documents[0] && graph.documents[0].id || 'entry'}`;
     const archiveHtml = injectValidationMarker(fixedHtml, rootValidationMarker);
     const routeResources = exportResources.filter((resource) => resource.routePage);
-    for (const resource of routeResources) resource.body = injectValidationMarker(String(resource.body || ''), resource.routeId);
+    const validationRoutes = createValidationRoutes(exportResources, pageUrl);
     zip.file('index.html', archiveHtml);
     zip.file('404.html', createSpaFallback());
     zip.file('replay-matcher.js', await fetch(chrome.runtime.getURL('replay-matcher.js')).then((response) => response.text()));
@@ -2454,21 +2505,6 @@ async function capture(action = 'fullCapture') {
     setStage('Проверка результата');
     status('Проверяю готовый архив...', 90);
     await saveGraphMission(graph, 'validating');
-    const rootPath = `${new URL(pageUrl).pathname}${new URL(pageUrl).search}`;
-    const validationRoutes = routeResources.filter((resource) => {
-      try {
-        const url = new URL(resource.routeUrl || resource.url);
-        return `${url.pathname}${url.search}` !== rootPath;
-      } catch (error) {
-        return true;
-      }
-    }).map((resource) => ({
-      routeId: resource.routeId,
-      url: resource.routeUrl || resource.url,
-      localPath: resource.localPath,
-      expectedMarker: resource.routeId,
-      evidenceRefs: [resource.routeId, ...(resource.evidenceRefs || [])].filter(Boolean)
-    }));
     const requiredFiles = [
       ...['index.html', '404.html', 'replay-matcher.js', 'replay-misses.json', 'sitesaver-offline.js', 'sitesaver-sw.js', 'sitesaver-report.json', 'sitesaver-manifest.json', 'archive-validator.js', 'archive-validator-companion.mjs', 'validate-windows.bat', 'validate-unix.sh', 'validation-plan.json', 'validation-report.json'].map((path) => ({ path, critical: true })),
       ...exportResources.map((resource) => ({ path: resource.localPath, critical: true, evidenceRefs: resource.evidenceRefs || [] })),
@@ -2562,6 +2598,7 @@ async function capture(action = 'fullCapture') {
     log('Архив скачан. Результат проверки сохранён в validation-report.json.', validation.status === 'ready' ? 'ok' : 'err');
   } catch (error) {
     const userCancelled = error.code === 'private-data-risk' || error.code === 'archive-size-cancelled';
+    const failedStage = currentProgressStage || 'неизвестный этап';
     setStage(userCancelled ? 'Отменено' : 'Ошибка');
     if (summaryCardEl) {
       renderSummary({
@@ -2589,8 +2626,9 @@ async function capture(action = 'fullCapture') {
         await captureStorage.cleanupTemporaryBodies(missionId).catch(() => {});
       }
     }
-    status(`Ошибка: ${error.message}`);
-    log(error.message, 'err');
+    status(`Ошибка: этап «${failedStage}»: ${error.message}`);
+    log(`Ошибка на этапе «${failedStage}»: ${error.message}`, 'err');
+    console.error(`openSave capture failed at ${failedStage}\n${error && error.stack || error}`);
   } finally {
     exportingMissionId = null;
     progress.style.display = 'none';

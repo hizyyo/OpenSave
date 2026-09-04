@@ -26,7 +26,7 @@ if (!failures.length) {
   if (/<script\b[^>]*\bsrc=["']https?:\/\//i.test(html)) failures.push('Remote executable script remains');
   if (/<link\b(?=[^>]*\brel=["'][^"']*stylesheet)[^>]*\bhref=["']https?:\/\//i.test(html)) failures.push('Remote stylesheet remains');
   if (!replay.includes("navigator.serviceWorker.register('/sitesaver-sw.js')")) failures.push('Offline bootstrap does not register the service worker');
-  if (!worker.includes("External network blocked by openSave")) failures.push('Service worker does not block external network');
+  if (!worker.includes("reasonCode: 'external-network-blocked'")) failures.push('Service worker does not block external network');
   if (!worker.includes("request.mode === 'navigate'")) failures.push('Service worker is missing SPA navigation fallback');
   if (!worker.includes('PAGE_ROUTES')) failures.push('Service worker is missing captured-page route mapping');
   if (!worker.includes('OpenSaveReplayMatcher.createMatcher')) failures.push('Service worker is missing exact request matching');
