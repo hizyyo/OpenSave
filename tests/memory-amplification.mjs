@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,7 +60,9 @@ const result = {
   samples
 };
 
-const output = join(ROOT, 'tests', 'artifacts', 'memory-amplification.json');
+const artifactsDirectory = join(ROOT, 'tests', 'artifacts');
+mkdirSync(artifactsDirectory, { recursive: true });
+const output = join(artifactsDirectory, 'memory-amplification.json');
 writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify(result, null, 2));
 console.log(`PASS: memory amplification measurements written to ${output}`);
