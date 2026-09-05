@@ -35,6 +35,21 @@ h1{font-size:16px;margin-bottom:2px}
 .summary-headline.failed{color:#ef4444}
 .summary-headline.cancelled{color:#f59e0b}
 .action-banner{margin-top:8px;padding:8px;background:#1e2430;border-left:3px solid #3b82f6;border-radius:4px;font-size:11px;color:#dbeafe}
+.open-guide{display:none;position:relative;overflow:hidden;margin-top:10px;padding:14px;background:linear-gradient(145deg,#18251e 0%,#121820 58%,#17151f 100%);border:1px solid #2f6b47;border-radius:10px;box-shadow:0 12px 28px rgba(0,0,0,.22)}
+.open-guide:before{content:"";position:absolute;top:-42px;right:-36px;width:110px;height:110px;border-radius:50%;background:rgba(34,197,94,.11);filter:blur(2px)}
+.open-guide-eyebrow{position:relative;color:#75e59b;font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase}
+.open-guide-title{position:relative;margin-top:3px;color:#f3f6f4;font-size:14px;font-weight:750;letter-spacing:-.15px}
+.open-guide-subtitle{position:relative;margin-top:3px;color:#98a39c;font-size:10px;line-height:1.45}
+.open-steps{position:relative;display:grid;gap:8px;margin-top:12px}
+.open-step{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}
+.open-step-number{display:grid;place-items:center;width:22px;height:22px;border:1px solid #3a6950;border-radius:7px;background:#193323;color:#8df0ad;font-size:10px;font-weight:800}
+.open-step strong{display:block;color:#e8ede9;font-size:11px;line-height:1.3}
+.open-step span{display:block;margin-top:1px;color:#8f9992;font-size:9px;line-height:1.4}
+.launcher-file{display:inline-flex!important;width:max-content;margin-top:4px!important;padding:4px 7px;border:1px solid #405a49;border-radius:5px;background:#0d1410;color:#b9f6cc!important;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px!important}
+.open-guide-note{position:relative;margin-top:11px;padding:8px 9px;border-radius:6px;background:rgba(9,13,11,.52);color:#aeb7b1;font-size:9px;line-height:1.45}
+.open-guide-note strong{color:#dbe5de}
+.open-guide-platforms{position:relative;margin-top:7px;color:#68736c;font-size:9px}
+.open-guide-platforms code{color:#96a69b;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .details-toggle{margin-top:10px;cursor:pointer;color:#888;font-size:11px;user-select:none;display:flex;align-items:center;gap:4px}
 .details-toggle:hover{color:#aaa}
 .log{background:#0e1016;border:1px solid #212531;border-radius:6px;padding:10px;max-height:250px;overflow-y:auto;font-size:11px;color:#888;line-height:1.5;font-family:monospace;margin-top:6px;display:none}
@@ -63,6 +78,18 @@ h1{font-size:16px;margin-bottom:2px}
   <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
 </div>
 <div class="summary-card" id="summaryCard"></div>
+<section class="open-guide" id="openGuide" aria-live="polite">
+  <div class="open-guide-eyebrow">ZIP загружен</div>
+  <div class="open-guide-title">Как открыть сохранённый сайт</div>
+  <div class="open-guide-subtitle">Ничего устанавливать не нужно. Выполните три шага:</div>
+  <div class="open-steps">
+    <div class="open-step"><div class="open-step-number">1</div><div><strong>Распакуйте ZIP-архив</strong><span>Не запускайте сайт прямо внутри ZIP.</span></div></div>
+    <div class="open-step"><div class="open-step-number">2</div><div><strong>Откройте распакованную папку</strong><span>Внутри уже находятся сайт, ресурсы и локальный сервер.</span></div></div>
+    <div class="open-step"><div class="open-step-number">3</div><div><strong>Запустите файл двойным кликом</strong><span class="launcher-file">open-windows.bat</span></div></div>
+  </div>
+  <div class="open-guide-note"><strong>Важно:</strong> не закрывайте открывшееся окно сервера, пока просматриваете сайт. Страница откроется в браузере автоматически.</div>
+  <div class="open-guide-platforms">macOS / Linux: запустите <code>open-unix.sh</code></div>
+</section>
 <div class="details-toggle" id="detailsToggle" style="display:none;">
   <span id="toggleIcon">▶</span> Подробности и диагностика
 </div>

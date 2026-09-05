@@ -7,7 +7,7 @@ const functionsReturningObjects = [
   'activateStartOverlay',
   'scrollForLazyResources',
   'exploreHoverStates',
-  'captureCanvasFallback',
+  'captureLiveDomState',
   'exploreInteractiveElements'
 ];
 

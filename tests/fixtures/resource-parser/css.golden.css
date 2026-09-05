@@ -1,0 +1,5 @@
+@import "/assets/theme.css" screen;
+@font-face { font-family: "Open Save"; src: url("/assets/open-save.woff2#font") format("woff2"); }
+.hero { background: url(/assets/hero-wide.png#crop); }
+.responsive { background-image: image-set(url("/assets/photo-1x.png") 1x, "/assets/photo-2x.png" 2x); }
+.embedded { mask: url(data:image/svg+xml,%3Csvg%3E); cursor: url(blob:https://example.test/id), auto; }

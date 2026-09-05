@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 const source = readFileSync(new URL('../background.js', import.meta.url), 'utf8');
 const failures = [];
 
-const activation = source.match(/async function activateStartOverlay\(tabId\) \{([\s\S]*?)\n\}/);
+const activation = source.match(/async function activateStartOverlay\(tabId, maxDurationMs = 8000\) \{([\s\S]*?)\n\}/);
 if (!activation) {
   failures.push('Deep capture has no start-overlay activation stage');
 } else {
@@ -14,8 +14,8 @@ if (!activation) {
   if (!/waited < 8000/.test(body)) failures.push('Start-overlay activation does not wait for delayed loaders');
 }
 
-const activationIndex = source.indexOf('activateStartOverlay(tabId)');
-const interactionIndex = source.indexOf('exploreInteractiveElements(tabId)');
+const activationIndex = source.indexOf('activateStartOverlay(tabId,');
+const interactionIndex = source.indexOf('exploreInteractiveElements(tabId,');
 if (activationIndex < 0 || interactionIndex < 0 || activationIndex > interactionIndex) {
   failures.push('Start-overlay activation must run before generic interactive exploration');
 }

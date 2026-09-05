@@ -23,27 +23,55 @@ jobs:
           node --check background.js
           node --check sidepanel.js
           node --check capture-graph.js
+          node --check capture-storage.js
+          node --check live-dom-state.js
+          node --check resource-parser.js
+          node --check rendered-page-crawler.js
           node --check replay-matcher.js
           node --check tests/capture-graph.mjs
-          node --check tests/replay-matcher.mjs
+          node --check tests/capture-storage.mjs
+          node --check tests/memory-amplification.mjs
           node --check tests/golden-capture.mjs
           node --check tests/browser-integration.mjs
           node --check tests/start-overlay-regression.mjs
           node --check tests/deep-runtime-regression.mjs
           node --check tests/archive-safety-regression.mjs
+          node --check tests/live-dom-state.mjs
+          node --check tests/resource-parser.mjs
+          node --check tests/rendered-page-crawler.mjs
+          node --check tests/rendered-crawler-regression.mjs
+          node --check tests/replay-matcher.mjs
+      - name: Typed resource parser check
+        run: node tests/resource-parser.mjs
+      - name: Rendered page crawler check
+        run: |
+          node tests/rendered-page-crawler.mjs
+          node tests/rendered-crawler-regression.mjs
       - name: Start-overlay regression check
         run: node tests/start-overlay-regression.mjs
       - name: Deep runtime regression check
         run: node tests/deep-runtime-regression.mjs
       - name: Archive safety regression check
         run: node tests/archive-safety-regression.mjs
-      - name: Capture graph replay projection check
+      - name: Capture graph schema and parity check
         run: node tests/capture-graph.mjs
       - name: Hermetic replay matcher check
         run: node tests/replay-matcher.mjs
+      - name: Live DOM state check
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node tests/live-dom-state.mjs
+      - name: Durable capture storage check
+        run: node tests/capture-storage.mjs
+      - name: Memory amplification measurement
+        run: node tests/memory-amplification.mjs
       - name: Golden archive check
         run: node tests/golden-capture.mjs tests/fixtures/offline-archive
       - name: Browser integration check
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: node tests/browser-integration.mjs tests/fixtures/offline-archive
+      - name: Benchmark corpus check
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node tests/benchmark-corpus.mjs --repeat=2

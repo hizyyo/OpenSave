@@ -14,6 +14,7 @@ const btnPickElement = document.getElementById('btnPickElement');
 const captureModeEl = document.getElementById('captureMode');
 const btnCancelCapture = document.getElementById('btnCancelCapture');
 const archiveLimitMbEl = document.getElementById('archiveLimitMb');
+const openGuideEl = document.getElementById('openGuide');
 const CaptureGraph = OpenSaveCaptureGraph;
 const CaptureStorage = OpenSaveCaptureStorage;
 const ResourceParser = OpenSaveResourceParser;
@@ -24,6 +25,7 @@ const captureStorage = CaptureStorage.createCaptureStorage();
 const captureStorageReady = captureStorage.initialize();
 let exportingMissionId = null;
 let activeValidation = null;
+let activeCapture = null;
 let currentProgressStage = '';
 let currentProgressPercent = 0;
 
@@ -105,8 +107,26 @@ function status(message, percent) {
   statusEl.textContent = PrivacyGuardrails.sanitizeText(String(message || ''), 'ui.status').value;
 }
 
+function createCaptureCancellation() {
+  const error = new Error('Сохранение отменено пользователем.');
+  error.code = 'capture-cancelled';
+  return error;
+}
+
+function throwIfCaptureCancelled() {
+  if (activeCapture && activeCapture.cancelled) throw createCaptureCancellation();
+}
+
 function isAnalyticsOrTracker(url) {
   return /google-analytics|googletagmanager|analytics|mc\.yandex|metrika|hotjar|segment|amplitude|mixpanel|facebook\.net|connect\.facebook|clarity\.ms|sentry/i.test(url || '');
+}
+
+function userFacingArchiveStatus(validationStatus, summary) {
+  if (validationStatus === 'ready') return 'ready';
+  const pagesComplete = summary.savedPages > 0 && summary.savedPages >= summary.totalDiscoveredPages;
+  const filesComplete = summary.savedFiles > 0 && summary.savedFiles >= summary.totalRequiredFiles;
+  if (pagesComplete && filesComplete && summary.failedRoutes === 0) return 'partial';
+  return validationStatus;
 }
 
 function renderSummary(summary) {
@@ -115,7 +135,7 @@ function renderSummary(summary) {
   summaryCardEl.style.display = 'block';
 
   let headlineText = 'Копия готова к просмотру';
-  if (summary.status === 'partial') headlineText = 'Копия сохранена частично';
+  if (summary.status === 'partial') headlineText = summary.captureComplete ? 'Копия сохранена с предупреждениями' : 'Копия сохранена частично';
   if (summary.status === 'failed') headlineText = 'Не удалось сохранить сайт';
   if (summary.status === 'cancelled') headlineText = 'Сохранение отменено';
 
@@ -205,6 +225,11 @@ function finalizeReport(report, catalog) {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'captureReport') renderReport(message.report);
+  if (message.action === 'captureProgress' && activeCapture) {
+    if (message.stage) setStage(message.stage);
+    if (message.status) status(message.status, message.percent);
+    if (message.logMessage) log(message.logMessage);
+  }
   if (message.action === 'elementPicked') {
     if (message.cancelled) {
       status('Выбор блока отменён');
@@ -236,6 +261,38 @@ function extractResourceReferences(html, baseUrl, ownerArtifact) {
 function appendItems(target, items) {
   for (const item of items || []) target.push(item);
   return target;
+}
+
+async function fetchResourceWithRetry(url, options = {}, fetcher = fetch, maxAttempts = 3) {
+  let lastError;
+  let lastResponse;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    throwIfCaptureCancelled();
+    try {
+      const response = await fetcher(url, options);
+      throwIfCaptureCancelled();
+      lastResponse = response;
+      if (response.ok || ![408, 425, 429, 500, 502, 503, 504].includes(response.status)) return response;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      if (activeCapture && activeCapture.cancelled) throw createCaptureCancellation();
+      lastError = error;
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 300));
+      throwIfCaptureCancelled();
+    }
+  }
+  if (lastResponse) return lastResponse;
+  throw lastError || new Error('Failed to fetch resource');
+}
+
+function resourceFetchCredentials(resourceUrl, pageUrl) {
+  try {
+    return new URL(resourceUrl).origin === new URL(pageUrl).origin ? 'include' : 'omit';
+  } catch (error) {
+    return 'omit';
+  }
 }
 
 function queryAllWithSnapshotTemplates(root, selector) {
@@ -801,11 +858,12 @@ function createPrivacyError(message) {
 
 function preparePrivateArtifacts(entryHtml, resources, snapshots) {
   const entryScan = PrivacyGuardrails.inspectRunnableBody(entryHtml, 'text/html', 'archive.index.html');
-  if (entryScan.risky) {
+  if (entryScan.risky && !entryScan.safeToSanitize) {
     throw createPrivacyError('В основной странице найдены возможные секреты. openSave не изменяет исполняемый HTML автоматически, поэтому экспорт отменён. Удалите секреты на странице или сохраните её после выхода из аккаунта.');
   }
+  const sanitizedEntryHtml = entryScan.safeToSanitize ? entryScan.sanitizedBody : entryHtml;
 
-  const findings = [];
+  const findings = [...entryScan.findings];
   const riskyResources = new Set();
   const riskySnapshots = new Set();
   const sanitizedSnapshots = snapshots.map((snapshot, index) => {
@@ -824,14 +882,16 @@ function preparePrivateArtifacts(entryHtml, resources, snapshots) {
     if (redirectResult.findings.length) riskySnapshots.add(index);
     const bodyScan = PrivacyGuardrails.inspectRunnableBody(snapshot.body, snapshot.mimeType, `${location}.body`);
     findings.push(...bodyScan.findings);
-    if (bodyScan.risky) riskySnapshots.add(index);
+    if (bodyScan.risky && !bodyScan.safeToSanitize) riskySnapshots.add(index);
     return {
       ...snapshot,
       url: urlResult.url,
       location: redirectResult.url,
       headers: headerResult.headers,
       requestBodyHash: requestBodyResult.findings.length ? undefined : snapshot.requestBodyHash,
-      postData: undefined
+      postData: undefined,
+      body: bodyScan.safeToSanitize ? bodyScan.sanitizedBody : snapshot.body,
+      contentHash: bodyScan.safeToSanitize ? undefined : snapshot.contentHash
     };
   });
   const sanitizedResources = resources.map((resource, index) => {
@@ -841,12 +901,17 @@ function preparePrivateArtifacts(entryHtml, resources, snapshots) {
     if (urlResult.findings.length) riskyResources.add(index);
     const bodyScan = PrivacyGuardrails.inspectRunnableBody(resource.body, resource.mimeType, `${location}.body`);
     findings.push(...bodyScan.findings);
-    if (bodyScan.risky) riskyResources.add(index);
-    return { ...resource, url: urlResult.url };
+    if (bodyScan.risky && !bodyScan.safeToSanitize) riskyResources.add(index);
+    return {
+      ...resource,
+      url: urlResult.url,
+      body: bodyScan.safeToSanitize ? bodyScan.sanitizedBody : resource.body,
+      contentHash: bodyScan.safeToSanitize ? undefined : resource.contentHash
+    };
   });
 
   const riskyCount = riskyResources.size + riskySnapshots.size;
-  if (!riskyCount) return { resources: sanitizedResources, snapshots: sanitizedSnapshots, findings, exclusions: [] };
+  if (!riskyCount) return { entryHtml: sanitizedEntryHtml, resources: sanitizedResources, snapshots: sanitizedSnapshots, findings, exclusions: [] };
   const exclude = window.confirm(`Найдены возможные секреты в ${riskyCount} сохранённых файлах или API-ответах.\n\nНажмите OK, чтобы исключить эти артефакты из архива (часть сайта может не работать). Нажмите Отмена, чтобы полностью отменить экспорт.`);
   if (!exclude) throw createPrivacyError('Экспорт отменён из-за риска утечки приватных данных.');
 
@@ -855,11 +920,30 @@ function preparePrivateArtifacts(entryHtml, resources, snapshots) {
     ...[...riskySnapshots].map((index) => ({ kind: 'api-snapshot', location: `archive.apiSnapshots[${index}]`, reason: 'private-data-risk' }))
   ];
   return {
+    entryHtml: sanitizedEntryHtml,
     resources: sanitizedResources.filter((resource, index) => !riskyResources.has(index)),
     snapshots: sanitizedSnapshots.filter((snapshot, index) => !riskySnapshots.has(index)),
     findings,
     exclusions
   };
+}
+
+function selectArchiveEntryHtml(capturedHtml, bodies, pageUrl, captureMode, liveDomState = {}) {
+  if (captureMode !== 'quick') return { html: capturedHtml, method: 'live-dom-state-v1' };
+  const requiresLiveDom = ['shadowRoots', 'canvases', 'blobUrls', 'adoptedStyleSheets', 'disclosures']
+    .some((key) => Number(liveDomState[key] || 0) > 0);
+  if (requiresLiveDom) return { html: capturedHtml, method: 'live-dom-state-v1' };
+  const networkDocument = bodies.find((resource) => {
+    try {
+      return normalizeUrl(resource.url) === normalizeUrl(pageUrl)
+        && (resource.mimeType || '').toLowerCase().startsWith('text/html');
+    } catch (error) {
+      return false;
+    }
+  });
+  const source = resourceText(networkDocument);
+  if (!source || !/<html\b/i.test(source)) return { html: capturedHtml, method: 'live-dom-state-v1' };
+  return { html: source, method: 'network-document-v1' };
 }
 
 function createWindowsValidatorLauncher() {
@@ -1329,7 +1413,9 @@ function configuredArchiveLimitBytes() {
 }
 
 async function estimateZip(zip) {
+  throwIfCaptureCancelled();
   const files = await archiveFiles(zip);
+  throwIfCaptureCancelled();
   return ArchiveOptimizer.estimateArchive([...files.values()].map((file) => ({ ...file, size: file.bytes.byteLength })));
 }
 
@@ -1531,6 +1617,7 @@ async function collectMissingFiles(html, pageUrl, catalog, report, includePages 
 
   let fetched = 0;
   while (queue.length > 0) {
+    throwIfCaptureCancelled();
     const item = queue.shift();
     let graphRequest = null;
     let graphResponse = null;
@@ -1547,7 +1634,11 @@ async function collectMissingFiles(html, pageUrl, catalog, report, includePages 
           evidenceRefs: graph.dependencyEdges.filter((edge) => edge.normalizedUrl === item.url).map((edge) => edge.id)
         });
       }
-      const response = await fetch(item.url, { credentials: 'include', cache: 'no-store' });
+      const response = await fetchResourceWithRetry(item.url, {
+        credentials: resourceFetchCredentials(item.url, pageUrl),
+        cache: 'no-store',
+        signal: activeCapture && activeCapture.controller.signal
+      });
       if (graph) {
         graphResponse = CaptureGraph.addResponse(graph, {
           missionId,
@@ -1766,7 +1857,7 @@ function createSelectedDocument(selected) {
 }
 
 async function downloadZip(zip, filename) {
-  const archive = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  const archive = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } }, throwIfCaptureCancelled);
   await downloadArchiveBlob(archive, filename);
   return archive.size;
 }
@@ -1774,7 +1865,9 @@ async function downloadZip(zip, filename) {
 async function downloadArchiveBlob(archive, filename) {
   const url = URL.createObjectURL(archive);
   try {
-    const downloadId = await chrome.downloads.download({ url, filename, saveAs: true });
+    throwIfCaptureCancelled();
+    const downloadId = await chrome.downloads.download({ url, filename, saveAs: false });
+    if (activeCapture) activeCapture.downloadId = downloadId;
     await new Promise((resolve, reject) => {
       let settled = false;
       const finish = (error) => {
@@ -1790,7 +1883,9 @@ async function downloadArchiveBlob(archive, filename) {
         try {
           const [download] = await chrome.downloads.search({ id: downloadId });
           if (!download || download.state === 'interrupted') {
-            finish(new Error(`Скачивание архива прервано${download && download.error ? `: ${download.error}` : ''}`));
+            const error = new Error(`Скачивание архива прервано${download && download.error ? `: ${download.error}` : ''}`);
+            error.code = activeCapture && activeCapture.cancelled ? 'capture-cancelled' : 'download-interrupted';
+            finish(error);
           } else if (download.state === 'complete') {
             finish();
           }
@@ -1800,11 +1895,16 @@ async function downloadArchiveBlob(archive, filename) {
       };
       const listener = (delta) => {
         if (delta.id !== downloadId) return;
-        if (delta.error) {
-          finish(new Error(`Скачивание архива прервано: ${delta.error.current}`));
+        if (delta.state && delta.state.current === 'complete') {
+          finish();
           return;
         }
-        if (delta.state && delta.state.current === 'complete') finish();
+        if (delta.error) {
+          const error = new Error(`Скачивание архива прервано: ${delta.error.current}`);
+          error.code = activeCapture && activeCapture.cancelled ? 'capture-cancelled' : 'download-interrupted';
+          finish(error);
+          return;
+        }
       };
       const poll = setInterval(inspect, 50);
       const timeout = setTimeout(() => finish(new Error('Скачивание архива не завершилось за 5 минут')), 5 * 60 * 1000);
@@ -1812,6 +1912,7 @@ async function downloadArchiveBlob(archive, filename) {
       inspect();
     });
   } finally {
+    if (activeCapture) activeCapture.downloadId = null;
     URL.revokeObjectURL(url);
   }
 }
@@ -1878,6 +1979,7 @@ function bytesToBase64(bytes) {
 async function archiveFiles(zip) {
   const files = new Map();
   for (const [path, entry] of Object.entries(zip.files)) {
+    throwIfCaptureCancelled();
     if (entry.dir) continue;
     const bytes = await entry.async('uint8array');
     files.set(ArchiveValidator.normalizePath(path), {
@@ -2119,6 +2221,7 @@ async function exportSelectedElement(selected) {
   logEl.textContent = '';
   logEl.style.display = 'none';
   reportEl.style.display = 'none';
+  if (openGuideEl) openGuideEl.style.display = 'none';
 
   try {
     if (!selected || !selected.html || !selected.pageUrl) throw new Error('Расширение не получило выбранный блок');
@@ -2255,8 +2358,9 @@ async function exportSelectedElement(selected) {
     log(`Точечный архив: ${(size / 1024 / 1024).toFixed(2)} MB, ${catalog.resources.length + 3} файлов`, 'ok');
     status('Готово', 100);
   } catch (error) {
+    const userCancelled = error.code === 'private-data-risk' || error.code === 'archive-size-cancelled' || error.code === 'capture-cancelled';
     if (exportingMissionId) {
-      if (error.code === 'private-data-risk' || error.code === 'archive-size-cancelled') {
+      if (userCancelled) {
         await captureStorage.cleanupMission(exportingMissionId).catch(() => {});
       } else {
         await captureStorage.saveMission(exportingMissionId, {
@@ -2268,9 +2372,14 @@ async function exportSelectedElement(selected) {
       }
     }
     const failedStage = currentProgressStage || 'неизвестный этап';
-    status(`Ошибка: этап «${failedStage}»: ${error.message}`);
-    log(`Ошибка на этапе «${failedStage}»: ${error.message}`, 'err');
-    console.error(`openSave capture failed at ${failedStage}\n${error && error.stack || error}`);
+    if (userCancelled) {
+      status('Сохранение отменено');
+      log('Сохранение отменено пользователем.');
+    } else {
+      status(`Ошибка: этап «${failedStage}»: ${error.message}`);
+      log(`Ошибка на этапе «${failedStage}»: ${error.message}`, 'err');
+      console.error(`openSave capture failed at ${failedStage}\n${error && error.stack || error}`);
+    }
   } finally {
     exportingMissionId = null;
     progress.style.display = 'none';
@@ -2287,11 +2396,13 @@ async function capture(action = 'fullCapture') {
   btnCapture.textContent = 'Захват...';
   captureModeEl.querySelectorAll('input').forEach((input) => { input.disabled = true; });
   if (archiveLimitMbEl) archiveLimitMbEl.disabled = true;
-  btnCancelCapture.hidden = mode !== 'deep';
+  activeCapture = { cancelled: false, controller: new AbortController(), downloadId: null };
+  btnCancelCapture.hidden = false;
   progress.style.display = 'block';
   logEl.textContent = '';
   logEl.style.display = 'none';
   reportEl.style.display = 'none';
+  if (openGuideEl) openGuideEl.style.display = 'none';
 
   try {
     const tab = await getActiveTab();
@@ -2300,6 +2411,7 @@ async function capture(action = 'fullCapture') {
     setStage('Подготовка страницы');
     status(mode === 'deep' ? 'Глубокий захват: подключаюсь...' : 'Быстрый захват: подключаюсь...', 5);
     const result = await chrome.runtime.sendMessage({ action, tabId: tab.id, mode });
+    throwIfCaptureCancelled();
     if (!result || !result.ok) throw new Error((result && result.error) || 'нет ответа от расширения');
 
     const { html, captureGraph: capturedGraph, interaction, liveDomState, report, domain, htmlMethod, pageUrl, mode: capturedMode = mode } = result;
@@ -2321,8 +2433,11 @@ async function capture(action = 'fullCapture') {
     const replayExchanges = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length, bodyProjection.length + snapshotProjection.length + replayProjection.length);
     const renderedPages = hydratedProjection.slice(bodyProjection.length + snapshotProjection.length + replayProjection.length);
 
+    const archiveEntry = selectArchiveEntryHtml(html, bodies, pageUrl, capturedMode, liveDomState);
+    const archiveSourceHtml = archiveEntry.html;
+
     setStage('Сбор страниц и ресурсов');
-    log(`HTML: ${(html.length / 1024).toFixed(1)} KB (${htmlMethod})`);
+    log(`HTML: ${(html.length / 1024).toFixed(1)} KB (${htmlMethod}); основа архива: ${archiveEntry.method}`);
     log(`Перехвачено ответов: ${bodies.length}`);
     log(capturedMode === 'deep' ? 'Режим: глубокий захват' : 'Режим: быстрый захват');
     if (interaction) log(`Интерактивных элементов: ${interaction.clicked} нажато, ${interaction.skipped} пропущено`);
@@ -2341,7 +2456,7 @@ async function capture(action = 'fullCapture') {
     const fallbackPageUrls = graph.routes.filter((route) => route.state === 'failed' && route.decisionReason === 'rendered-navigation-failed').map((route) => route.routeUrl);
     
     setStage('Сохранение медиа и данных');
-    const fetched = await collectMissingFiles(html, pageUrl, catalog, captureReport, false, graph, fallbackPageUrls);
+    const fetched = await collectMissingFiles(archiveSourceHtml, pageUrl, catalog, captureReport, false, graph, fallbackPageUrls);
     log(`Дозагружено ссылок и ресурсов: ${fetched}`);
     for (const exclusion of catalog.exclusions) addReportItem(captureReport, 'optimizationExclusions', exclusion);
     applyLargeMediaChoice(catalog, captureReport);
@@ -2400,7 +2515,7 @@ async function capture(action = 'fullCapture') {
     status('Переписываю пути...', 55);
     const resolver = createResourceResolver(catalog.byUrl, graph);
     const entryDiagnostics = [];
-    const rewrittenHtml = rewriteHtmlResource(html, pageUrl, resolver, entryDiagnostics);
+    const rewrittenHtml = rewriteHtmlResource(archiveSourceHtml, pageUrl, resolver, entryDiagnostics);
     const hydratedHtml = restoreSsrHydration(rewrittenHtml, bodies, pageUrl);
     const fixedHtml = injectOfflineBootstrap(hydratedHtml);
     for (const diagnostic of entryDiagnostics) CaptureGraph.addDiagnostic(graph, {
@@ -2455,7 +2570,7 @@ async function capture(action = 'fullCapture') {
     status('Собираю архив...', 75);
     const zip = new JSZip();
     const rootValidationMarker = `root:${graph.documents[0] && graph.documents[0].id || 'entry'}`;
-    const archiveHtml = injectValidationMarker(fixedHtml, rootValidationMarker);
+    const archiveHtml = injectValidationMarker(prepared.entryHtml, rootValidationMarker);
     const routeResources = exportResources.filter((resource) => resource.routePage);
     const validationRoutes = createValidationRoutes(exportResources, pageUrl);
     zip.file('index.html', archiveHtml);
@@ -2551,12 +2666,27 @@ async function capture(action = 'fullCapture') {
     renderReport(finalReport);
 
     const totalDiscoveredPages = (graph.routes || []).length || 1;
-    const totalRequiredFiles = (finalReport.completeness && finalReport.completeness.discovered) || catalog.resources.length;
-    const savedFiles = (finalReport.completeness && finalReport.completeness.saved) || catalog.resources.length;
     const ignoredAnalytics = (finalReport.unresolvedResources || []).filter((item) => isAnalyticsOrTracker(item.url)).length;
+    const totalRequiredFiles = Math.max(0, ((finalReport.completeness && finalReport.completeness.discovered) || catalog.resources.length) - ignoredAnalytics);
+    const savedFiles = (finalReport.completeness && finalReport.completeness.saved) || catalog.resources.length;
+
+    const summaryInput = {
+      savedPages: savedPageCount,
+      totalDiscoveredPages,
+      savedFiles,
+      totalRequiredFiles,
+      failedRoutes: validation.routes.filter((route) => route.status === 'failed').length
+    };
+    const summaryStatus = userFacingArchiveStatus(validation.status, summaryInput);
+    const captureComplete = summaryStatus === 'partial'
+      && summaryInput.savedPages >= summaryInput.totalDiscoveredPages
+      && summaryInput.savedFiles >= summaryInput.totalRequiredFiles
+      && summaryInput.failedRoutes === 0;
 
     let recommendedAction = '';
-    if (validation.status === 'partial') {
+    if (captureComplete) {
+      recommendedAction = 'Архив создан, все сохранённые страницы открываются. Проверьте технические замечания, если важны аналитика, внешние виджеты или исключённые приватные данные.';
+    } else if (validation.status === 'partial') {
       if (validation.diagnostics.some((item) => item.code === 'local-companion-required')) {
         recommendedAction = 'Откройте распакованную папку и запустите validate-windows.bat (или validate-unix.sh) для финальной проверки сервис-воркера.';
       } else {
@@ -2567,14 +2697,11 @@ async function capture(action = 'fullCapture') {
     }
 
     renderSummary({
-      status: validation.status,
-      savedPages: savedPageCount,
-      totalDiscoveredPages,
-      savedFiles,
-      totalRequiredFiles,
+      status: summaryStatus,
+      captureComplete,
+      ...summaryInput,
       ignoredAnalyticsCount: ignoredAnalytics,
       testedRoutes: validation.checkedRoutes,
-      failedRoutes: validation.routes.filter((r) => r.status === 'failed').length,
       recommendedAction
     });
 
@@ -2585,19 +2712,20 @@ async function capture(action = 'fullCapture') {
 
     setStage('Готово');
     status('Генерирую архив...', 94);
-    const archive = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const archive = await zip.generateAsync({ type: 'blob', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } }, throwIfCaptureCancelled);
     log(`Архив: ${(archive.size / 1024 / 1024).toFixed(2)} MB, ${exportResources.length + 1} файлов`, 'ok');
 
     status('Скачиваю...', 97);
     await downloadArchiveBlob(archive, `${domain}.zip`);
+    if (openGuideEl) openGuideEl.style.display = 'block';
 
     await captureStorage.cleanupMission(missionId);
     exportingMissionId = null;
 
-    status(validation.status === 'ready' ? 'Архив готов' : `Архив скачан: ${validation.status}`, 100);
+    status(summaryStatus === 'ready' ? 'Архив готов' : summaryStatus === 'partial' ? 'Архив скачан с предупреждениями' : `Архив скачан: ${validation.status}`, 100);
     log('Архив скачан. Результат проверки сохранён в validation-report.json.', validation.status === 'ready' ? 'ok' : 'err');
   } catch (error) {
-    const userCancelled = error.code === 'private-data-risk' || error.code === 'archive-size-cancelled';
+    const userCancelled = error.code === 'private-data-risk' || error.code === 'archive-size-cancelled' || error.code === 'capture-cancelled';
     const failedStage = currentProgressStage || 'неизвестный этап';
     setStage(userCancelled ? 'Отменено' : 'Ошибка');
     if (summaryCardEl) {
@@ -2626,10 +2754,16 @@ async function capture(action = 'fullCapture') {
         await captureStorage.cleanupTemporaryBodies(missionId).catch(() => {});
       }
     }
-    status(`Ошибка: этап «${failedStage}»: ${error.message}`);
-    log(`Ошибка на этапе «${failedStage}»: ${error.message}`, 'err');
-    console.error(`openSave capture failed at ${failedStage}\n${error && error.stack || error}`);
+    if (userCancelled) {
+      status('Сохранение отменено');
+      log('Сохранение отменено пользователем.');
+    } else {
+      status(`Ошибка: этап «${failedStage}»: ${error.message}`);
+      log(`Ошибка на этапе «${failedStage}»: ${error.message}`, 'err');
+      console.error(`openSave capture failed at ${failedStage}\n${error && error.stack || error}`);
+    }
   } finally {
+    activeCapture = null;
     exportingMissionId = null;
     progress.style.display = 'none';
     resetInterface();
@@ -2640,6 +2774,11 @@ btnCapture.addEventListener('click', () => capture());
 
 btnCancelCapture.addEventListener('click', async () => {
   btnCancelCapture.disabled = true;
+  if (activeCapture) {
+    activeCapture.cancelled = true;
+    activeCapture.controller.abort();
+    if (activeCapture.downloadId != null) await chrome.downloads.cancel(activeCapture.downloadId).catch(() => {});
+  }
   if (activeValidation) {
     activeValidation.cancelled = true;
     status('Отменяю проверку архива...');
@@ -2648,7 +2787,7 @@ btnCancelCapture.addEventListener('click', async () => {
   }
   status('Отменяю захват...');
   const result = await chrome.runtime.sendMessage({ action: 'cancelCapture', reason: 'user-cancelled' }).catch((error) => ({ ok: false, error: error.message }));
-  if (!result || !result.ok) log((result && result.error) || 'Не удалось отменить захват', 'err');
+  if ((!result || !result.ok) && !(activeCapture && activeCapture.cancelled)) log((result && result.error) || 'Не удалось отменить захват', 'err');
 });
 
 window.addEventListener('beforeunload', () => {

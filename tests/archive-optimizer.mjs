@@ -17,7 +17,7 @@ const element = () => ({
 });
 let confirmResult = true;
 const context = vm.createContext({
-  console, URL, URLSearchParams, Blob, TextEncoder, TextDecoder, CompressionStream, Response, crypto, Math,
+  console, URL, URLSearchParams, Blob, TextEncoder, TextDecoder, CompressionStream, Response, crypto, Math, setTimeout,
   document: {
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, element());
@@ -36,6 +36,23 @@ const context = vm.createContext({
   JSZip
 });
 vm.runInContext(source, context);
+
+const capturedDom = '<html><body><div class="clone">rendered clone</div></body></html>';
+const networkHtml = '<!doctype html><html><body><script src="/app.js"></script></body></html>';
+assert.equal(context.selectArchiveEntryHtml(capturedDom, [{ url: 'https://a.test/', mimeType: 'text/html', body: networkHtml }], 'https://a.test/', 'quick').html, networkHtml);
+assert.equal(context.selectArchiveEntryHtml(capturedDom, [{ url: 'https://a.test/', mimeType: 'text/html', body: networkHtml }], 'https://a.test/', 'deep').html, capturedDom);
+assert.equal(context.selectArchiveEntryHtml(capturedDom, [{ url: 'https://a.test/', mimeType: 'text/html', body: networkHtml }], 'https://a.test/', 'quick', { shadowRoots: 1 }).html, capturedDom);
+assert.equal(context.selectArchiveEntryHtml(capturedDom, [{ url: 'https://a.test/', mimeType: 'text/html', body: networkHtml }], 'https://a.test/', 'quick', { canvases: 1 }).html, capturedDom);
+let fetchAttempts = 0;
+const retriedResponse = await context.fetchResourceWithRetry('https://a.test/retry.png', {}, async () => {
+  fetchAttempts += 1;
+  if (fetchAttempts < 2) throw new Error('transient network failure');
+  return new Response('ok', { status: 200 });
+});
+assert.equal(retriedResponse.status, 200);
+assert.equal(fetchAttempts, 2, 'Fallback resources must retry transient network failures');
+assert.equal(context.resourceFetchCredentials('https://cdn.a.test/video.mp4', 'https://a.test/'), 'omit');
+assert.equal(context.resourceFetchCredentials('https://a.test/private.png', 'https://a.test/page'), 'include');
 
 const largeAppendTarget = [];
 context.appendItems(largeAppendTarget, Array.from({ length: 150000 }, (_, index) => index));

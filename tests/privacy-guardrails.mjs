@@ -117,8 +117,15 @@ assertNoSecrets(formSnapshot, 'form snapshot');
 const runnableBody = `<script>const token = "${secrets.apiKey}";</script>`;
 const bodyRisk = PrivacyGuardrails.inspectRunnableBody(runnableBody, 'text/html', 'index.html');
 assert.equal(bodyRisk.risky, true);
+assert.equal(bodyRisk.safeToSanitize, false);
 assert.equal(runnableBody.includes(secrets.apiKey), true, 'Scanner must not rewrite runnable evidence');
 assertNoSecrets(bodyRisk.findings, 'body findings');
+
+const runnableUrl = `const endpoint = "https://api.example.test/data?key=${secrets.apiKey}";`;
+const runnableUrlRisk = PrivacyGuardrails.inspectRunnableBody(runnableUrl, 'text/javascript', 'app.js');
+assert.equal(runnableUrlRisk.risky, true);
+assert.equal(runnableUrlRisk.safeToSanitize, true);
+assertNoSecrets(runnableUrlRisk.sanitizedBody, 'sanitized runnable URL');
 
 const sidepanelSource = readFileSync(new URL('../sidepanel.js', import.meta.url), 'utf8');
 assert.doesNotMatch(sidepanelSource, /snapshot\.postData}\\n\$\{snapshot\.sequence/, 'Snapshot paths must not hash raw POST data');
@@ -142,6 +149,10 @@ assert.equal(prepared.resources.length, 0, 'Confirmed risky artifact must be exc
 assert.equal(prepared.exclusions.length, 1);
 assert.equal(prepared.exclusions[0].location, 'archive.resources[0]');
 assertNoSecrets(prepared.findings, 'artifact audit');
+const preparedRunnableUrl = context.preparePrivateArtifacts('<!doctype html><p>safe</p>', [{ url: 'https://example.test/app.js', localPath: 'assets/app.js', mimeType: 'text/javascript', body: runnableUrl, contentHash: 'sha256:stale' }], []);
+assert.equal(preparedRunnableUrl.resources.length, 1, 'Runnable files with only URL secrets must be sanitized instead of excluded');
+assert.equal(preparedRunnableUrl.resources[0].contentHash, undefined);
+assertNoSecrets(preparedRunnableUrl.resources[0].body, 'prepared runnable URL');
 confirmResult = false;
 assert.throws(() => context.preparePrivateArtifacts('<!doctype html><p>safe</p>', [riskyResource], []), /Экспорт отменён/);
 assert.throws(() => context.preparePrivateArtifacts(runnableBody, [], []), /основной странице найдены возможные секреты/);

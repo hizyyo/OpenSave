@@ -437,6 +437,13 @@ async function interruptActiveMission(reason) {
 }
 
 async function cancelActiveCapture(missionId, reason = 'user-cancelled') {
+  if (activeOperation && activeOperation.cancelRequested) return { ok: true, missionId: activeMissionId };
+  if (activeOperation && !activeMissionId) {
+    activeOperation.cancelRequested = true;
+    activeOperation.cancelReason = reason;
+    activeOperation.cancelRequestedAt = Date.now();
+    return { ok: true, missionId: null };
+  }
   if (!activeMissionId || (missionId && missionId !== activeMissionId)) return { ok: false, error: 'Активная миссия захвата не найдена' };
   const currentMissionId = activeMissionId;
   if (activeOperation) {
@@ -496,6 +503,11 @@ function scheduleReportUpdate() {
     reportUpdateScheduled = false;
     chrome.runtime.sendMessage({ action: 'captureReport', report: PrivacyGuardrails.sanitizeMetadata(captureReport, 'captureReport') }).catch(() => {});
   }, 250);
+}
+
+function reportCaptureProgress(operation, stage, status, percent, logMessage = '') {
+  if (!operation || !isCurrentOperation(operation.id) || operation.cancelRequested) return;
+  chrome.runtime.sendMessage({ action: 'captureProgress', stage, status, percent, logMessage }).catch(() => {});
 }
 
 function requestKey(debuggeeId, requestId) {
@@ -951,6 +963,14 @@ async function runRenderedPageCrawler(tabId, seedUrl, operation) {
     route.bodyStart = captureGraph.bodies.length;
     try {
       const budget = planner.budgetSnapshot();
+      const routeNumber = captureGraph.routes.filter((item) => item.state === 'captured').length + 1;
+      reportCaptureProgress(
+        operation,
+        'Глубокий обход сайта',
+        `Открываю страницу ${routeNumber} из максимум ${planner.policy.maxPages}...`,
+        Math.min(45, 8 + Math.round((budget.elapsedMs / planner.policy.maxDurationMs) * 37)),
+        `Deep: страница ${routeNumber}: ${route.routeUrl}`
+      );
       const routePolicy = { ...planner.policy, maxRouteDurationMs: Math.max(1, Math.min(planner.policy.maxRouteDurationMs, planner.policy.maxDurationMs - budget.elapsedMs)) };
       let idle = await navigateRenderedRoute(tabId, route, operation, routePolicy);
       if (idle.result === 'cancelled') {
@@ -958,13 +978,14 @@ async function runRenderedPageCrawler(tabId, seedUrl, operation) {
         break;
       }
       if (!planner.setTransition(route, lastNavigationKind)) continue;
-      const firstScroll = await optionalStage('Rendered route scrolling', () => scrollForLazyResources(tabId), { containers: 0 });
+      const firstScroll = await boundedDebuggerStage('Rendered route scrolling', tabId, () => scrollForLazyResources(tabId, remainingCrawlerBudget(planner, 12000)), remainingCrawlerBudget(planner, 12000), { containers: 0 });
       if (route.discoveryKind === 'seed') {
-        const startActivation = await optionalStage('Start overlay activation', () => activateStartOverlay(tabId), { clicked: 0, waited: 0 });
-        const replayedScenario = await optionalStage('Scenario replay', () => replayScenario(tabId, operation.captureScenario || []), { total: 0, replayed: 0 });
-        const hover = await optionalStage('Hover exploration', () => exploreHoverStates(tabId), { hovered: 0 });
-        const interaction = await optionalStage('Interactive exploration', () => exploreInteractiveElements(tabId), { clicked: 0, skipped: 0, states: 0 });
-        const finalScroll = await optionalStage('Final scrolling', () => scrollForLazyResources(tabId), { containers: 0 });
+        reportCaptureProgress(operation, 'Глубокий обход сайта', 'Исследую состояния первой страницы...', 34, 'Deep: исследую lazy-load, hover и безопасные UI-состояния');
+        const startActivation = await boundedDebuggerStage('Start overlay activation', tabId, () => activateStartOverlay(tabId, remainingCrawlerBudget(planner, 8000)), remainingCrawlerBudget(planner, 8000), { clicked: 0, waited: 0 });
+        const replayedScenario = await boundedDebuggerStage('Scenario replay', tabId, () => replayScenario(tabId, operation.captureScenario || [], remainingCrawlerBudget(planner, 12000)), remainingCrawlerBudget(planner, 12000), { total: 0, replayed: 0 });
+        const hover = await boundedDebuggerStage('Hover exploration', tabId, () => exploreHoverStates(tabId, remainingCrawlerBudget(planner, 10000)), remainingCrawlerBudget(planner, 10000), { hovered: 0 });
+        const interaction = await boundedDebuggerStage('Interactive exploration', tabId, () => exploreInteractiveElements(tabId, remainingCrawlerBudget(planner, 20000)), remainingCrawlerBudget(planner, 20000), { clicked: 0, skipped: 0, states: 0 });
+        const finalScroll = await boundedDebuggerStage('Final scrolling', tabId, () => scrollForLazyResources(tabId, remainingCrawlerBudget(planner, 8000)), remainingCrawlerBudget(planner, 8000), { containers: 0 });
         operation.crawlInteraction = { ...interaction, hover, replayedScenario, startActivation, scrollContainers: firstScroll.containers + finalScroll.containers };
       }
       idle = await waitForRouteIdle(tabId, operation, routePolicy);
@@ -998,7 +1019,37 @@ async function runRenderedPageCrawler(tabId, seedUrl, operation) {
     }
   }
   syncPlannerRoutes(planner);
+  const capturedRoutes = planner.routes.filter((route) => route.state === 'captured').length;
+  reportCaptureProgress(operation, 'Глубокий обход сайта', `Обход завершён: сохранено страниц ${capturedRoutes}.`, 48, `Deep: обход завершён, страниц: ${capturedRoutes}`);
   return planner;
+}
+
+function remainingCrawlerBudget(planner, stageLimitMs) {
+  const remaining = planner.policy.maxDurationMs - planner.budgetSnapshot().elapsedMs;
+  return Math.max(0, Math.min(stageLimitMs, remaining));
+}
+
+async function boundedDebuggerStage(name, tabId, action, timeoutMs, fallback) {
+  if (timeoutMs <= 0) return fallback;
+  let timeoutId;
+  try {
+    return await Promise.race([
+      action(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error(`${name} exceeded its ${timeoutMs} ms budget`);
+          error.code = 'stage-timeout';
+          reject(error);
+        }, timeoutMs);
+      })
+    ]);
+  } catch (error) {
+    if (error && error.code === 'stage-timeout') await chrome.debugger.sendCommand({ tabId }, 'Runtime.terminateExecution').catch(() => {});
+    addReport('unreadableResponses', { url: name, reason: error.message });
+    return fallback;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function enableNetworkCapture(debuggeeId, attachChildren = false) {
@@ -1154,6 +1205,7 @@ async function fullCapture(tabId, sendResponse, scenario = [], operation, mode =
   let crawlPlanner = null;
   try {
     if (operation) operation.captureMode = mode;
+    reportCaptureProgress(operation, 'Подготовка страницы', mode === 'deep' ? 'Создаю изолированную вкладку...' : 'Подключаюсь к текущей странице...', 5);
     const sourceTab = await chrome.tabs.get(tabId);
     if (mode === 'deep') {
       const isolatedTab = await chrome.tabs.create({ url: 'about:blank', active: false });
@@ -1166,6 +1218,11 @@ async function fullCapture(tabId, sendResponse, scenario = [], operation, mode =
       reply(attached);
       return;
     }
+    if (operation.cancelRequested) {
+      reply({ ok: false, error: 'Захват отменён', missionId: activeMissionId, cancelled: true });
+      return;
+    }
+    reportCaptureProgress(operation, mode === 'deep' ? 'Глубокий обход сайта' : 'Захват страницы', mode === 'deep' ? 'Подключено. Начинаю обход сайта...' : 'Подключено. Перезагружаю страницу...', 8);
 
     await chrome.debugger.sendCommand({ tabId: captureTabId }, 'Page.enable');
     const initialDocument = mode === 'quick'
@@ -1196,6 +1253,7 @@ async function fullCapture(tabId, sendResponse, scenario = [], operation, mode =
     }
 
     const currentTab = await chrome.tabs.get(captureTabId);
+    reportCaptureProgress(operation, 'Завершение захвата', 'Собираю перехваченные ответы и DOM...', 50);
     const pageUrl = mode === 'deep' ? sourceTab.url : currentTab.url;
     if (mode === 'deep') await optionalStage('Cache Storage export', () => captureKnownCaches(captureTabId, pageUrl), undefined);
     const domain = new URL(pageUrl).hostname || 'site';
@@ -1474,15 +1532,17 @@ async function finishScenario(tabId, sendResponse, operation, mode) {
   }
 }
 
-async function replayScenario(tabId, scenario) {
+async function replayScenario(tabId, scenario, maxDurationMs = 12000) {
   if (!scenario.length) return { total: 0, replayed: 0 };
   const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
     expression: `
       (async () => {
         const actions = ${serializeForRuntime(scenario)};
+        const deadline = Date.now() + ${Math.max(0, maxDurationMs)};
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         let replayed = 0;
         for (const action of actions) {
+          if (Date.now() >= deadline) break;
           const element = document.querySelector(action.selector);
           if (!element) continue;
           element.scrollIntoView({ block: 'center', inline: 'center' });
@@ -1506,11 +1566,12 @@ async function replayScenario(tabId, scenario) {
   return result.result.value || { total: scenario.length, replayed: 0 };
 }
 
-async function activateStartOverlay(tabId) {
+async function activateStartOverlay(tabId, maxDurationMs = 8000) {
   const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
     expression: `
       (async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const deadline = Date.now() + ${Math.max(0, maxDurationMs)};
         const startLabel = /^(?:start|begin|enter|launch)$/i;
         const visible = (element) => {
           const style = getComputedStyle(element);
@@ -1525,7 +1586,7 @@ async function activateStartOverlay(tabId) {
           });
 
         let waited = 0;
-        for (; waited < 8000; waited += 250) {
+        for (; waited < 8000 && Date.now() < deadline; waited += 250) {
           const element = candidate();
           if (!element) {
             await delay(250);
@@ -1619,11 +1680,12 @@ async function captureLiveDomState(tabId) {
   }
 }
 
-async function scrollForLazyResources(tabId) {
+async function scrollForLazyResources(tabId, maxDurationMs = 15000) {
   const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
     expression: `
       (async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const deadline = Date.now() + ${Math.max(0, maxDurationMs)};
         const roots = () => {
           const all = [document];
           for (let index = 0; index < all.length; index += 1) {
@@ -1638,15 +1700,18 @@ async function scrollForLazyResources(tabId) {
           return (style.overflowY === 'auto' || style.overflowY === 'scroll') && element.scrollHeight > element.clientHeight + 40;
         }).slice(0, 40);
         let previousHeight = 0;
-        for (let pass = 0; pass < 4; pass += 1) {
+        for (let pass = 0; pass < 4 && Date.now() < deadline; pass += 1) {
           const height = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
           for (let y = 0; y < height; y += Math.max(400, window.innerHeight * 0.75)) {
+            if (Date.now() >= deadline) break;
             window.scrollTo(0, y);
             await delay(120);
           }
           for (const container of containers()) {
+            if (Date.now() >= deadline) break;
             const originalTop = container.scrollTop;
             for (let top = 0; top < container.scrollHeight; top += Math.max(250, container.clientHeight * 0.75)) {
+              if (Date.now() >= deadline) break;
               container.scrollTop = top;
               container.dispatchEvent(new Event('scroll', { bubbles: true }));
               await delay(80);
@@ -1667,11 +1732,12 @@ async function scrollForLazyResources(tabId) {
   return result.result.value || { containers: 0 };
 }
 
-async function exploreHoverStates(tabId) {
+async function exploreHoverStates(tabId, maxDurationMs = 10000) {
   const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
     expression: `
       (async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const deadline = Date.now() + ${Math.max(0, maxDurationMs)};
         const roots = () => {
           const all = [document];
           for (let index = 0; index < all.length; index += 1) {
@@ -1685,6 +1751,7 @@ async function exploreHoverStates(tabId) {
         const candidates = roots().flatMap((root) => [...root.querySelectorAll(selector)]).slice(0, 150);
         let hovered = 0;
         for (const element of candidates) {
+          if (Date.now() >= deadline) break;
           const rect = element.getBoundingClientRect();
           const style = getComputedStyle(element);
           if (!rect.width || !rect.height || style.visibility === 'hidden' || style.display === 'none') continue;
@@ -1705,11 +1772,12 @@ async function exploreHoverStates(tabId) {
   return result.result.value || { hovered: 0 };
 }
 
-async function exploreInteractiveElements(tabId) {
+async function exploreInteractiveElements(tabId, maxDurationMs = 20000) {
   const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
     expression: `
       (async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const deadline = Date.now() + ${Math.max(0, maxDurationMs)};
         const visited = new WeakSet();
         const dangerous = /\\b(?:add to cart|buy|cancel|checkout|confirm|delete|disconnect|logout|log out|order|pay|payment|purchase|remove|save|send|sign out|submit|subscribe|wallet)\\b/i;
         const dangerousRussian = /авторизац|выйти|вход|войти|корзин|купить|оплат|удал|отмен|подтверд|подпис|сохран|отправ|заказ/i;
@@ -1796,11 +1864,12 @@ async function exploreInteractiveElements(tabId) {
         };
 
         states.add(fingerprint());
-        for (let round = 0; round < 8 && clicked < 120; round += 1) {
+        for (let round = 0; round < 8 && clicked < 120 && Date.now() < deadline; round += 1) {
           const candidates = roots().flatMap((root) => [...root.querySelectorAll(selector)]);
           let clickedThisRound = 0;
 
           for (const element of candidates) {
+            if (Date.now() >= deadline) break;
             if (clicked >= 120) break;
             if (visited.has(element) || !isVisible(element)) continue;
             visited.add(element);

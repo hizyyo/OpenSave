@@ -15,8 +15,12 @@ assert.match(background, /inFlightRequestKeys\.size === 0/, 'Rendered routes mus
 assert.match(background, /document\.querySelectorAll\('a\[href\]'\)/, 'Route discovery must use ordinary anchors');
 assert.doesNotMatch(background.slice(background.indexOf('async function discoverRenderedRoutes'), background.indexOf('async function navigateRenderedRoute')), /button|form|submit/i, 'Route discovery must not click controls or submit forms');
 assert.match(background, /operation\.cancelRequested/, 'Crawler waits must observe cooperative cancellation');
+assert.match(background, /action: 'captureProgress'/, 'Deep capture must publish progress while the background crawler is running');
+assert.match(background, /remainingCrawlerBudget/, 'Deep interaction work must stay inside the crawler time budget');
+assert.match(background, /Runtime\.terminateExecution/, 'A stuck in-page exploration must be terminated when its stage budget expires');
+assert.match(background, /activeOperation && activeOperation\.cancelRequested/, 'Cancellation must be accepted before a durable mission is created');
 assert.match(sidepanel, /rendered-navigation-failed-fetch-fallback/, 'Fetch fallback must be explicitly lower fidelity');
-assert.match(sidepanel, /collectMissingFiles\(html, pageUrl, catalog, captureReport, false, graph, fallbackPageUrls\)/, 'Rendered Deep capture must not run the old fetch-only page crawler');
+assert.match(sidepanel, /collectMissingFiles\(archiveSourceHtml, pageUrl, catalog, captureReport, false, graph, fallbackPageUrls\)/, 'Rendered Deep capture must only refetch dependencies missing from the selected rendered entry');
 assert.match(sidepanel, /projectRenderedPages/, 'Archive pages must come from rendered checkpoints');
 assert.match(panel, /id="btnCancelCapture"/, 'Deep capture must expose cancellation');
 

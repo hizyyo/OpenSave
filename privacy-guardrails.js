@@ -262,10 +262,13 @@
     const type = String(mimeType || '').toLowerCase();
     const textLike = !type || type.startsWith('text/') || /json|javascript|xml|svg|x-www-form-urlencoded/.test(type);
     if (body == null || !textLike || typeof body !== 'string') {
-      return { risky: false, findings: [] };
+      return { risky: false, findings: [], safeToSanitize: false, sanitizedBody: body };
     }
-    const findings = sanitizeText(String(body), location).findings;
-    return { risky: findings.length > 0, findings };
+    const result = sanitizeText(String(body), location);
+    const safeToSanitize = result.findings.length > 0 && result.findings.every((item) =>
+      item.category === 'url-parameter' || item.category === 'url-credential' || item.category === 'url-fragment'
+    );
+    return { risky: result.findings.length > 0, findings: result.findings, safeToSanitize, sanitizedBody: result.value };
   }
 
   function sanitizeFormSnapshot(summary = {}) {

@@ -6,11 +6,15 @@ self.addEventListener('install', (event) => event.waitUntil(caches.open(CACHE).t
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (event) => event.respondWith((async () => {
   const cache = await caches.open(CACHE);
-  if (new URL(event.request.url).pathname === '/replay-misses.json') return cache.match('/replay-misses.json');
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin || !['GET', 'HEAD'].includes(event.request.method)) {
+    return new Response(JSON.stringify({ reasonCode: 'external-network-blocked', evidence: { method: event.request.method, url: event.request.url } }), { status: 503, statusText: 'External network blocked by openSave', headers: { 'content-type': 'application/json' } });
+  }
+  if (url.pathname === '/replay-misses.json') return cache.match('/replay-misses.json');
   if (event.request.mode === 'navigate') {
     const exact = await cache.match(event.request);
     if (exact) return exact;
-    const page = PAGE_ROUTES[new URL(event.request.url).pathname];
+    const page = PAGE_ROUTES[url.pathname];
     if (page) return cache.match(page);
     return cache.match('/index.html');
   }

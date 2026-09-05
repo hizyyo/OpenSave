@@ -14,6 +14,20 @@ This check ensures Deep capture activates a visible startup control before gener
 
 `tests/archive-safety-regression.mjs` guards SRI removal, same-origin offline CSP, lazy `data-src` rewriting, quoted CSS URLs, and duplicate/external script filtering.
 
+`tests/replay-matcher.mjs` validates exact method/URL/content-type/body-hash identities, ordered repeated responses, POST isolation, visible ambiguity, and fail-closed reason codes.
+
+`tests/capture-graph.mjs` validates the versioned capture schema, SHA-256 body deduplication, URL aliases, GET/POST variants, redirect identity, refetch provenance, immutable derived artifacts, diagnostics, and V1 writer projection parity.
+
+`tests/live-dom-state.mjs` uses a real browser to verify current safe form values, redaction, disclosures, open shadow roots, adopted/CSSOM styles, canvas fallback, blob-backed DOM resources, and closed-root diagnostics.
+
+`tests/capture-storage.mjs` validates durable mission/body lifecycle, restart recovery, cancellation, quota diagnostics, temporary cleanup, shared-body ownership, negative reads/commits, and a chunked 201 MiB fixture.
+
+`tests/memory-amplification.mjs` measures retained string, Base64, Blob, and JSZip allocations and writes machine-readable output to `tests/artifacts/memory-amplification.json`.
+
+`tests/resource-parser.mjs` runs table-driven discovery cases and golden rewrites for HTML/lazy attributes, `srcset`, CSS imports/fonts/image sets, SVG references, and static ES module specifiers. It also guards data/blob preservation, redirects/aliases, unresolved executable blocking, parser isolation, escaping, and byte-identical ordinary JavaScript strings.
+
+`tests/rendered-page-crawler.mjs` validates route identity, same-origin safety decisions, static/SSR/SPA distinctions, redirects and canonical aliases, hard candidate/page/time/byte/state budgets, infinite-link stopping, and cancellation. `tests/rendered-crawler-regression.mjs` guards the isolated-tab executor, bounded network/DOM idle, anchor-only discovery, rendered archive projection, fallback labeling, and cancel wiring.
+
 ## Golden Archive Check
 
 The golden check validates archive structure without launching a browser.
@@ -61,6 +75,20 @@ node tests/browser-integration.mjs C:\path\to\unpacked-archive
 ```
 
 The current comparison uses SHA-256 byte equality. Use it for deterministic fixtures rather than live production captures.
+
+## Benchmark Corpus
+
+The benchmark corpus runs controlled, locally served fixtures covering static syntax, SPA routes, multi-page crawling, shadow roots, lazy content, canvas, API variants, platform features (workers/iframes/CacheStorage), and negative detector cases. It captures them through the real unpacked extension, extracts the generated ZIP, replays each archive in a headless Chrome origin, and asserts stability across repeated runs.
+
+```powershell
+node tests/benchmark-corpus.mjs --repeat=2
+```
+
+Outputs:
+
+- Machine-readable results: `tests/artifacts/benchmark/results.json`
+- Markdown scorecard: `tests/artifacts/benchmark/scorecard.md`
+- Replay screenshots: `tests/artifacts/benchmark/run-*-<fixture>.png`
 
 ## Fixture
 

@@ -9,17 +9,20 @@ if (!/\[integrity\][^\n]*removeAttribute\('integrity'\)/.test(source)) {
 if (!/Content-Security-Policy/.test(source) || !/connect-src \\'self\\'/.test(source)) {
   failures.push('Offline documents do not include a same-origin network policy');
 }
-if (!/data-srcset/.test(source) || !/data-src/.test(source)) {
+if (!/OpenSaveResourceParser/.test(source) || !/extractResourceReferences/.test(source)) {
   failures.push('Lazy data-src and data-srcset attributes are not rewritten');
 }
-if (!/quotedValue \|\| unquotedValue/.test(source)) {
+if (!/ResourceParser\.rewriteCss/.test(source) || !/discoverCssReferences/.test(source)) {
   failures.push('CSS URL parsing does not preserve quoted paths with spaces');
 }
-if (!/document\.querySelectorAll\('script\[src\]'\)/.test(source) || !/scriptSources\.has\(source\)/.test(source)) {
+if (!/queryAll\('script\[src\]'\)/.test(source) || !/scriptSources\.has\(source\)/.test(source)) {
   failures.push('Duplicate or external script sources are not filtered');
 }
 if (!/inlineScriptSources/.test(source) || !/\.src\\s\*=/.test(source)) {
   failures.push('Inline script-injected duplicate sources are not filtered');
+}
+if (/const literal =/.test(source) || /script:not\(\[src\]\)[^\n]*rewriteJavaScriptUrls/.test(source)) {
+  failures.push('Broad JavaScript string rewriting is still enabled');
 }
 
 if (failures.length) {

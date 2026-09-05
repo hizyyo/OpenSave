@@ -79,10 +79,15 @@ node --check background.js
 node --check sidepanel.js
 node tests/golden-capture.mjs tests/fixtures/offline-archive
 node tests/browser-integration.mjs tests/fixtures/offline-archive   # needs Chrome
+node tests/benchmark-corpus.mjs --repeat=2                        # needs Chrome
 node tests/start-overlay-regression.mjs
 ```
 
 CI runs these on every push and PR with a fresh Chrome for Testing.
+
+## Roadmap
+
+The deliberately small MVP plan lives in [`sessions/`](./sessions/README.md). Developer extraction, WARC/WACZ, reconstruction, browser-state restoration, single-HTML, incremental updates, diffs, and repair automation are explicitly out of scope. The product plan is in [`docs/PRODUCT_ROADMAP.md`](./docs/PRODUCT_ROADMAP.md).
 
 ## License
 
