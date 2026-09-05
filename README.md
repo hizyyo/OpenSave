@@ -4,15 +4,24 @@
   <img src="logo.png" width="160" alt="openSave logo">
 </p>
 
-A Chrome extension that captures the page you're looking at and saves it as a complete offline copy. HTML, CSS, JS, fonts, images, 3D models, API responses — everything the browser actually received goes into one `.zip` you can open from any static server. No build step, no Node.js, no backend.
+OpenSave preserves modern interactive websites, including SPAs, WebGL experiences, and campaign microsites, as portable offline archives with API replay and capture diagnostics.
+
+It is a Chrome extension for preserving modern interactive webpages and bounded same-origin sites. OpenSave captures supported browser-visible resources, rewrites them for offline use, and packages the result as a structured `.zip`. Archives can be viewed through the included local launchers without a build step, Node.js project, or backend.
 
 ## Why this exists
 
-"Save page as…" gives you a pile of HTML with broken references. wget mirrors folders but mangles SPA routing and misses API calls. openSave sits on the real network layer via the Chrome DevTools Protocol, so it records what the browser really loaded — then rewrites all the paths so the archive works offline.
+Modern web projects often depend on client-side routing, runtime-loaded assets, API responses, canvas state, and delayed interactions. Conventional file downloads do not preserve all of these dependencies.
 
-The archive is a static folder. Serve it with any static host (or just `python3 -m http.server`) and the included service worker handles routing, saved API responses, and blocks any attempt to reach the live network.
+OpenSave observes supported resources through the Chrome DevTools Protocol, records their provenance in a capture graph, and rewrites captured paths for best-effort offline replay. The included service worker handles supported routes and API snapshots while blocking unexpected live-network requests during replay.
 
 Captured archives are not Node.js projects. Do not run `npm install` or `npm run dev` inside them. New archives include `open-windows.bat`, `open-windows.ps1`, and `open-unix.sh` launchers for local viewing.
+
+## Who it is for
+
+- Digital agencies preserving completed campaign sites.
+- Creators archiving interactive portfolios.
+- QA and development teams reproducing frontend states.
+- Researchers and preservation teams archiving authorized public web material.
 
 ## Install
 
@@ -24,23 +33,32 @@ You need Chrome 125+.
 
 ## How to use it
 
-Open the site you want to keep, click the openSave icon, pick a mode, and hit Download.
+Open the authorized webpage or project you want to preserve, click the openSave icon, choose a mode, and select Download.
 
-**Quick** — saves the current page and its direct dependencies. Good for articles and single pages.
+**Quick** saves the current page and its supported direct dependencies. It is intended for individual pages and focused captures.
 
-**Deep** — reloads the page and walks the site:
+**Deep** reloads the page and performs a bounded capture:
 
-- waits for delayed loaders and activates safe start overlays (the `START` / `BEGIN` screens some WebGL sites put in front of their content)
+- waits for delayed loaders and activates a limited set of start overlays, such as the `START` or `BEGIN` screens used by some WebGL projects
 - scrolls the page and nested containers to trigger lazy-loaded assets
-- hovers and clicks through safe UI states (tabs, accordions, menus) and rolls them back
+- explores explicitly permitted same-origin routes within fixed page, time, and byte budgets
+- interacts with a limited set of reversible UI elements, such as tabs, accordions, and menus
 - replays a recorded scenario if you recorded one
-- exports `CacheStorage` entries and canvas fallbacks for 3D scenes
-- snapshots `fetch`/`XHR` responses so API calls still work offline
+- exports supported `CacheStorage` entries and canvas fallbacks for WebGL or other canvas-based experiences
+- snapshots supported `fetch`/`XHR` responses for best-effort offline API replay
 
 There are also two smaller tools:
 
-- **Record scenario** — walk through a flow yourself (open the config panel, switch a tab), then let Deep capture replay it during the crawl.
-- **Element picker** — highlight one block on the page and export just that as a small archive.
+- **Record scenario**: walk through a flow yourself, such as opening a configuration panel or switching a tab, then let Deep capture replay it during the bounded capture.
+- **Element picker**: highlight one block on the page and export it as a smaller archive.
+
+## How it differs from Save Page As and wget
+
+- Observes supported resources through the Chrome DevTools Protocol instead of relying only on the final document source.
+- Supports SPA routing and selected same-origin routes within bounded capture limits.
+- Records supported `fetch`/`XHR` responses as API snapshots for offline replay.
+- Produces validation diagnostics and a completeness report instead of silently omitting unsupported resources.
+- Blocks unexpected live-network requests during service-worker replay.
 
 ## What's inside the archive
 
@@ -60,17 +78,42 @@ site.zip
 └── README.txt
 ```
 
-`sitesaver-report.json` has a completeness score and lists anything that couldn't be saved, so you know what's missing before you share the archive.
+`sitesaver-report.json` contains a completeness score, validation results, and diagnostics for resources or behavior that could not be preserved. Review it before relying on or distributing an archive.
+
+## Engineering highlights
+
+- Chrome DevTools Protocol capture for supported browser-visible responses and child targets.
+- A provenance-aware capture graph that distinguishes observed, derived, and refetched artifacts.
+- Durable capture storage with interruption recovery and cleanup of temporary bodies.
+- Typed HTML, CSS, SVG, and JavaScript resource discovery and path rewriting.
+- Service-worker routing and exact-match replay for supported API snapshots.
+- Bounded rendered-route exploration with time, page, byte, and interaction limits.
+- Post-export validation, completeness reporting, and explicit diagnostics for unsupported behavior.
+- Live DOM serialization with open shadow-root support and best-effort WebGL, canvas, and blob URL fallbacks.
+
+## Privacy guardrails
+
+OpenSave applies privacy guardrails to known sensitive headers, URL parameters, request metadata, and sensitive form fields. It can redact recognized values or exclude artifacts when automated sanitization would be unsafe.
+
+These checks are defensive filters, not a guarantee that every secret or personal value will be detected. API response bodies and captured resources may contain personal, confidential, or account-specific data that automated rules do not recognize.
+
+Treat every archive as private and not safe to share until its contents and `sitesaver-report.json` have been reviewed manually.
 
 ## What it can't do
 
-- Rebuild content the browser never received (login-walled data, WebSocket streams).
-- Guarantee a GPU 3D scene renders identically — canvas fallbacks cover the common case.
-- Follow external links or touch pages outside the current session. It intentionally doesn't.
+- Reconstruct content or server behavior that was not available during capture.
+- Bypass authentication, paywalls, access controls, or other restrictions.
+- Guarantee that every framework, API call, WebSocket stream, service worker, or browser feature can be replayed offline.
+- Guarantee pixel-identical WebGL or GPU output; canvas and media fallbacks are best-effort.
+- Follow cross-origin links or perform an unbounded crawl.
+- Produce a perfect copy of every website. Unsupported behavior remains visible in diagnostics and completeness reporting.
 
-## Boundaries
+## Responsible use
 
-Only use this on sites you own or are allowed to archive. A capture may include copyrighted material, personal data, or session tokens. Check `sitesaver-report.json` before distributing anything, and never publish captures with credentials or private data.
+- Use OpenSave only on websites you own or have permission to preserve.
+- Do not use it to bypass authentication, paywalls, or access controls.
+- You are responsible for having the right to preserve and distribute captured content.
+- Review archive contents, privacy findings, and validation diagnostics before publication or sharing.
 
 ## Development
 
